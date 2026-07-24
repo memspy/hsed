@@ -122,6 +122,14 @@ Inside the detail panel:
 | `k`   | SIGKILL the process (type `KILL` to confirm)           |
 | `Esc` | Close                                                   |
 
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/scan.png" width="80%"/></p>
+
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/truncated.png" width="80%"/></p>
+
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/hup.png" width="80%"/></p>
+
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/killing.png" width="80%"/></p>
+
 ## Important operational notes
 
 **Truncate is a low-level operation.** It is safe for the common case —
