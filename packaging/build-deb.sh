@@ -1,13 +1,4 @@
 #!/bin/sh
-# packaging/build-deb.sh — builds hsed_<version>_amd64.deb from a clean
-# checkout. Run from the packaging/ directory:
-#
-#   cd packaging && ./build-deb.sh
-#
-# Requires: gcc, make, python3, pip, dpkg-deb. Needs network access to
-# fetch textual + its dependencies from PyPI (only at build time — the
-# resulting .deb is fully self-contained and needs no network to install
-# or run).
 set -eu
 
 VERSION=1.0.0
@@ -28,10 +19,7 @@ mkdir -p "$VENDOR_BUILD"
 pip install --break-system-packages --target="$VENDOR_BUILD" "textual>=0.60.0"
 find "$VENDOR_BUILD" -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 find "$VENDOR_BUILD" -iname "*.pyc" -delete
-rm -rf "$VENDOR_BUILD/bin"   # vendored CLI scripts we don't need
-# Trim dist-info down to what's actually useful (keeps the package smaller;
-# METADATA/RECORD/INSTALLER are enough for pip/tools to recognize what's
-# installed if ever inspected).
+rm -rf "$VENDOR_BUILD/bin"   
 find "$VENDOR_BUILD" -iname "*.dist-info" -type d | while read -r d; do
     find "$d" -type f ! -name METADATA ! -name RECORD ! -name INSTALLER -delete 2>/dev/null || true
 done
@@ -54,10 +42,6 @@ cp -r "$ROOT/hidden_space_explorer" "$PKGROOT/usr/share/hsed/hidden_space_explor
 find "$PKGROOT/usr/share/hsed" -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 find "$PKGROOT/usr/share/hsed" -iname "*.pyc" -delete
 
-# The small hand-written files (DEBIAN/control, postinst, postrm, and the
-# usr/bin/hsed launcher script) live in packaging/pkg-static/, never inside
-# $PKGROOT — this directory gets rm -rf'd and rebuilt fresh every run, so
-# anything meant to survive across builds has to live outside it.
 STATIC="$HERE/pkg-static"
 if [ ! -f "$STATIC/DEBIAN/control" ] || [ ! -f "$STATIC/usr/bin/hsed" ]; then
     echo "error: $STATIC is missing control/hsed — packaging/pkg-static/" >&2
@@ -74,7 +58,6 @@ chmod 755 "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/postrm"
 chmod 644 "$PKGROOT/DEBIAN/control"
 
 SIZE_KB=$(du -sk --exclude=DEBIAN "$PKGROOT" | cut -f1)
-# Replace any existing Installed-Size line, or add one after Priority.
 if grep -q '^Installed-Size:' "$PKGROOT/DEBIAN/control"; then
     sed -i "s/^Installed-Size:.*/Installed-Size: $SIZE_KB/" "$PKGROOT/DEBIAN/control"
 else
