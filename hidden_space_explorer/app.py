@@ -1,9 +1,3 @@
-"""
-app.py — the TUI itself: a table of every unlinked-but-open file currently
-eating disk space that `du` can't see, plus per-entry actions. All actual
-work (scanning /proc, ftruncate, ptrace) happens in the hsed C daemon;
-this module is a thin Textual client talking to it over client.py.
-"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -27,9 +21,7 @@ def human_size(n: float) -> str:
     return f"{n:.1f}P"
 
 
-# --------------------------------------------------------------------------- #
-# Modal: yes/no confirmation for destructive actions
-# --------------------------------------------------------------------------- #
+
 class ConfirmScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("y", "confirm", "Yes"),
@@ -53,11 +45,7 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-# --------------------------------------------------------------------------- #
-# Modal: stronger confirmation for KILL — SIGKILL is immediate and can't be
-# caught or blocked by the target, so a single stray keypress shouldn't be
-# enough to trigger it the way a y/n prompt would be.
-# --------------------------------------------------------------------------- #
+
 class DangerConfirmScreen(ModalScreen[bool]):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
@@ -85,9 +73,6 @@ class DangerConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-# --------------------------------------------------------------------------- #
-# Screen: live write stream for one fd (the "killer feature")
-# --------------------------------------------------------------------------- #
 class StreamScreen(Screen):
     BINDINGS = [Binding("escape", "back", "Back")]
 
@@ -109,11 +94,6 @@ class StreamScreen(Screen):
     def on_mount(self) -> None:
         log = self.query_one("#stream-log", RichLog)
         try:
-            # Connecting + sending the command is a local-socket round trip
-            # (microseconds) — fine to do synchronously here. Doing it on
-            # the UI thread (rather than inside the worker below) means
-            # self._session is guaranteed set before the user can possibly
-            # press Escape, so action_back() never races an unset session.
             self._session = client.HsedClient().open_stream(self.entry.pid, self.entry.fd)
         except client.HsedError as e:
             log.write(f"[!] {e}")
@@ -127,10 +107,6 @@ class StreamScreen(Screen):
             self._session.close()
 
     def action_back(self) -> None:
-        # Closing here (not just in on_unmount) unblocks the worker
-        # thread's recv() immediately, so the daemon detaches from the
-        # traced process right away instead of whenever Textual gets
-        # around to tearing the screen down.
         if self._session is not None:
             self._session.close()
         self.app.pop_screen()
@@ -156,9 +132,7 @@ class StreamScreen(Screen):
             self.app.call_from_thread(log.write, f"[!] Stream error: {e}")
 
 
-# --------------------------------------------------------------------------- #
-# Modal: details + actions for one hidden file
-# --------------------------------------------------------------------------- #
+
 class DetailScreen(ModalScreen[Optional[str]]):
     BINDINGS = [
         Binding("escape", "dismiss_none", "Close"),
@@ -258,10 +232,7 @@ class DetailScreen(ModalScreen[Optional[str]]):
             self.dismiss(f"Error: {e}")
 
 
-# --------------------------------------------------------------------------- #
-# Screen: the "hidden filesystem" — a directory tree reconstructed purely
-# from the deleted paths, none of which exist on disk anymore
-# --------------------------------------------------------------------------- #
+
 class HiddenTreeScreen(Screen):
     BINDINGS = [Binding("escape", "app.pop_screen", "Back to table")]
 
@@ -302,7 +273,6 @@ class HiddenTreeScreen(Screen):
         entries = event.node.data
         if not entries:
             return  # a directory node, not a file leaf
-        # Largest fd first — usually the one worth looking at.
         entry = max(entries, default=None, key=lambda e: e.size)
         if entry is None:
             return
@@ -315,9 +285,7 @@ class HiddenTreeScreen(Screen):
         self.app.push_screen(DetailScreen(entry))
 
 
-# --------------------------------------------------------------------------- #
-# Main app
-# --------------------------------------------------------------------------- #
+
 class HiddenSpaceExplorer(App):
     """Main screen: table of every unlinked-but-open file, live-refreshed."""
 
@@ -369,10 +337,6 @@ class HiddenSpaceExplorer(App):
         table = self.query_one(DataTable)
         table.add_columns("PID", "Process", "FD", "Mode", "Size", "Owner", "Was at")
         self.query_one("#filter", Input).display = False
-        # Textual auto-focuses the first focusable widget on mount, which
-        # would otherwise be the (hidden) filter Input — leaving it focused
-        # means every single-letter hotkey (v/r/...) gets typed into it
-        # instead of triggering an action. Put focus on the table instead.
         table.focus()
         self.action_rescan()
         self.set_interval(self.interval, self.action_rescan)
@@ -380,7 +344,6 @@ class HiddenSpaceExplorer(App):
     def action_toggle_tree(self) -> None:
         self.push_screen(HiddenTreeScreen(self.entries))
 
-    # -- filtering -----------------------------------------------------------
     def action_focus_filter(self) -> None:
         f = self.query_one("#filter", Input)
         f.display = True
@@ -393,7 +356,6 @@ class HiddenSpaceExplorer(App):
             event.input.display = False
             self.query_one(DataTable).focus()
 
-    # -- scanning --------------------------------------------------------------
     @work(exclusive=True, thread=True)
     def action_rescan(self) -> None:
         try:
@@ -437,14 +399,7 @@ class HiddenSpaceExplorer(App):
             f"[r] rescan  [/] filter  [Enter] details  [v] tree view  [q] quit"
         )
 
-    # -- detail / actions ------------------------------------------------------
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """
-        Fired when the user presses Enter (or clicks) on a table row —
-        DataTable owns the 'enter' key itself (bound to select_cursor), so we
-        hook its resulting message instead of trying to rebind 'enter' at the
-        App level, which would never fire while the table has focus.
-        """
         self._open_detail_for_key(event.row_key)
 
     def _open_detail_for_key(self, row_key) -> None:
