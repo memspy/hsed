@@ -46,6 +46,9 @@ sudo hsed
 ```bash
 cd backend && make                       # builds hsedd
 cd ../packaging && ./build-deb.sh        # assembles + builds the .deb
+
+chmod +x ./build-deb.sh                  # if permission denied
+sudo ./build-deb.sh
 ```
 
 See `packaging/build-deb.sh` for exactly what goes into the package (it's
@@ -260,8 +263,11 @@ sudo hsed
 ### Самостоятельная сборка пакета
 
 ```bash
-cd backend && make                       # сборка hsedd
-cd ../packaging && ./build-deb.sh        # компоновка и сборка .deb
+cd backend && make                       # собираем hsed
+cd ../packaging && ./build-deb.sh        # компоновка + сборка
+
+chmod +x ./build-deb.sh                  # если ошибка доступ запрещен
+sudo ./build-deb.sh
 ```
 
 Подробности того, что попадает в пакет, смотрите в `packaging/build-deb.sh`
