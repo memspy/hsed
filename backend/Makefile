@@ -1,11 +1,3 @@
-# Builds hsedd — the privileged backend daemon. Naming split is deliberate:
-#   hsedd  = the daemon (this binary) — parses /proc, does ftruncate/kill/
-#            ptrace, speaks the socket protocol. Lives in /usr/sbin, the
-#            same convention as sshd/nginx for unattended, privileged
-#            services.
-#   hsed   = the interactive TUI command a user actually types — that's
-#            the Python package in ../hidden_space_explorer, installed as
-#            /usr/bin/hsed by the .deb (see ../packaging/).
 CC      ?= gcc
 CFLAGS  ?= -Wall -Wextra -Werror -O2 -D_GNU_SOURCE -std=gnu11
 LDFLAGS ?= -pthread
