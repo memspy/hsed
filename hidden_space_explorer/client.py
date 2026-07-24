@@ -1,9 +1,3 @@
-"""
-client.py — thin client for the hsed C daemon. The TUI never touches
-/proc, ptrace, or ftruncate itself anymore; every privileged operation
-goes through hsed's Unix domain socket protocol (see
-backend/src/protocol.h for the wire format this mirrors).
-"""
 from __future__ import annotations
 
 import base64
@@ -76,8 +70,7 @@ class WriteEvent:
 
 
 class _LineReader:
-    """Small buffered line reader — recv'ing one byte at a time works but
-    wastes a syscall per byte, which matters for STREAM on a busy fd."""
+    
 
     def __init__(self, sock: socket.socket, bufsize: int = 4096) -> None:
         self._sock = sock
@@ -98,12 +91,6 @@ class _LineReader:
 
 
 def build_path_tree(entries: list[HiddenEntry]) -> dict:
-    """
-    Reconstructs a virtual directory tree from the original (now-deleted)
-    paths, so the TUI can render a "hidden filesystem" view even though
-    none of these paths exist on disk anymore. Leaves are lists of
-    HiddenEntry (usually length 1; longer if several fds share a path).
-    """
     root: dict = {}
     for e in entries:
         parts = [p for p in e.path.split("/") if p]
@@ -118,11 +105,7 @@ def build_path_tree(entries: list[HiddenEntry]) -> dict:
 
 
 class HsedClient:
-    """
-    One socket connection per call (or per STREAM session) — cheap on a
-    local Unix socket, and it keeps the client free of any shared-state
-    concurrency concerns in the TUI.
-    """
+    
 
     def __init__(self, socket_path: Optional[str] = None, timeout: float = 5.0) -> None:
         self.socket_path = socket_path or default_socket_path()
@@ -198,10 +181,7 @@ class HsedClient:
             s.close()
 
     def kill(self, pid: int) -> None:
-        """Sends SIGKILL. Unlike hup(), this is not a request the process
-        can handle gracefully — it terminates immediately, with no chance
-        to clean up. The kernel releases all its fds as part of normal
-        process teardown, same as any other way the process could die."""
+        
         s = self._connect()
         try:
             s.sendall(f"KILL {pid}\n".encode())
@@ -215,13 +195,7 @@ class HsedClient:
             s.close()
 
     def open_stream(self, pid: int, fd: int) -> "StreamSession":
-        """
-        Opens a STREAM session against the daemon. Connecting and sending
-        the command happens synchronously (it's a local socket — this
-        takes microseconds), so this is safe to call directly from a UI
-        thread; iterate the returned session's .events() from a worker
-        thread, and call .close() from the UI thread to abort early.
-        """
+        
         s = self._connect()
         s.settimeout(None)  # a quiet fd can go a long time between writes
         try:
@@ -233,16 +207,7 @@ class HsedClient:
 
 
 class StreamSession:
-    """
-    A live STREAM connection. Call .events() (from any thread — typically
-    a worker thread, since it blocks) to iterate captured writes, and
-    .close() (typically from the UI thread) to abort early: closing the
-    socket unblocks a recv() that's currently in progress in the other
-    thread, which is what makes the tracer's poll_cb notice the
-    disconnect and detach from the traced process promptly. Always call
-    .close() when you're done with a session — an un-closed one leaves
-    the daemon attached to the target process indefinitely.
-    """
+    
 
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
