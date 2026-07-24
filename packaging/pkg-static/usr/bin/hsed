@@ -1,0 +1,12 @@
+#!/bin/sh
+# /usr/bin/hsed — launches the Hidden Space Explorer TUI.
+#
+# Runs against a vendored copy of its Python dependencies under
+# /usr/share/hsed/vendor, so this works with nothing but the system's
+# python3 — no pip install, no virtualenv, no internet access needed at
+# install or run time. The privileged backend is a separate binary,
+# /usr/sbin/hsedd (see `man hsedd` or `hsedd --help`); this command only
+# talks to it over a Unix socket.
+set -e
+exec env PYTHONPATH="/usr/share/hsed/vendor:/usr/share/hsed${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m hidden_space_explorer "$@"

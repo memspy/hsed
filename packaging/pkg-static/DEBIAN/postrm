@@ -1,0 +1,26 @@
+#!/bin/sh
+# postrm for hsed — stops and disables the systemd service before its
+# unit file disappears, and reloads systemd afterward so it doesn't keep
+# a stale unit definition around.
+set -e
+
+case "$1" in
+    remove|purge)
+        if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            systemctl stop hsed >/dev/null 2>&1 || true
+            systemctl disable hsed >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    # Runtime-only state; safe to remove even if hsedd is still running
+    # (it already has the fd open, unlinking the path doesn't affect it).
+    rm -f /run/hsed.sock /run/hsed.pid
+fi
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

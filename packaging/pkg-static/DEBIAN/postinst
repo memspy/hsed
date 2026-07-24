@@ -1,0 +1,21 @@
+#!/bin/sh
+# postinst for hsed — deliberately does NOT enable or start the service
+# automatically: hsedd typically runs as root with CAP_SYS_PTRACE, and an
+# admin should opt into that rather than have a package install silently
+# turn it on.
+set -e
+
+if [ "$1" = "configure" ]; then
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        echo "hsed installed. Start the backend daemon with:"
+        echo "  sudo systemctl enable --now hsed"
+    else
+        echo "hsed installed. Start the backend daemon with:"
+        echo "  sudo hsedd            (background)"
+        echo "  sudo hsedd --foreground"
+    fi
+    echo "Then run: hsed"
+fi
+
+exit 0

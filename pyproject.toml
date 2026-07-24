@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hidden-space-explorer"
+version = "1.0.0"
+description = "TUI explorer for disk space hidden in unlinked-but-open file descriptors"
+requires-python = ">=3.9"
+dependencies = [
+    "textual>=0.60.0",
+]
+
+[project.scripts]
+hsed = "hidden_space_explorer.__main__:main"
+
+[tool.setuptools]
+packages = ["hidden_space_explorer"]
