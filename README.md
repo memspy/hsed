@@ -17,7 +17,7 @@ every privileged operation happens in `hsedd`.
                           Unix domain socket                 └───────────────────────┘
 ```
 
-## Install
+## Install from releases
 
 ```bash
 sudo dpkg -i hsed_1.0.0_amd64.deb
@@ -49,6 +49,9 @@ cd ../packaging && ./build-deb.sh        # assembles + builds the .deb
 
 chmod +x ./build-deb.sh                  # if permission denied
 sudo ./build-deb.sh
+sudo dpkg -i hsed_1.0.0_amd64.deb
+sudo systemctl enable --now hsed  
+
 ```
 
 See `packaging/build-deb.sh` for exactly what goes into the package (it's
@@ -236,7 +239,7 @@ packaging/
                           Unix domain socket                 └───────────────────────┘
 ```
 
-## Установка
+## Установка с релизов
 
 ```bash
 sudo dpkg -i hsed_1.0.0_amd64.deb
@@ -268,6 +271,8 @@ cd ../packaging && ./build-deb.sh        # компоновка + сборка
 
 chmod +x ./build-deb.sh                  # если ошибка доступ запрещен
 sudo ./build-deb.sh
+sudo dpkg -i hsed_1.0.0_amd64.deb
+sudo systemctl enable --now hsed  
 ```
 
 Подробности того, что попадает в пакет, смотрите в `packaging/build-deb.sh`
