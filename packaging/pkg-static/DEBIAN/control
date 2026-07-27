@@ -1,9 +1,9 @@
 Package: hsed
-Version: 1.0.0
+Version: 1.1.0
 Section: admin
 Priority: optional
 Architecture: amd64
-Depends: libc6 (>= 2.34), python3 (>= 3.9)
+Depends: libc6 (>= 2.34)
 Recommends: strace
 Maintainer: Hidden Space Explorer Maintainers <noreply@localhost>
 Description: TUI explorer for disk space hidden in unlinked-but-open files
@@ -11,12 +11,12 @@ Description: TUI explorer for disk space hidden in unlinked-but-open files
  process fd - the reason `df -h` can show a full disk while `du -sh` finds
  nothing to account for it. Ships two commands:
  .
-  hsed  - the interactive TUI (Textual-based), talks to hsedd over a
-          Unix socket. Table view, a reconstructed "hidden filesystem"
-          tree, and per-file actions: truncate and reclaim space, send
-          SIGHUP for a graceful log reopen, SIGKILL an unresponsive
-          process, or live-stream exactly what it is writing right now
-          via ptrace.
+  hsed  - the interactive TUI (Go, statically linked, no runtime
+          dependencies of its own), talks to hsedd over a Unix socket.
+          Table view, a reconstructed "hidden filesystem" tree, and
+          per-file actions: truncate and reclaim space, send SIGHUP for
+          a graceful log reopen, SIGKILL an unresponsive process, or
+          live-stream exactly what it is writing right now via ptrace.
   hsedd - the privileged backend daemon (systemd unit: hsed.service).
           Does all the actual /proc scanning, ftruncate, signal delivery,
           and ptrace work; hsed is purely a client of its Unix socket

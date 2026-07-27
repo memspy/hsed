@@ -2,17 +2,22 @@
 
 A tool for the classic "`df -h` says 100%, `du -sh` finds nothing" incident.
 
+**v1.1.0 note:** the TUI was rewritten from Python/Textual to Go
+(`charmbracelet/bubbletea`) — `hsed` is now a single statically-linked
+binary with zero runtime dependencies of its own. The C backend (`hsedd`)
+and the socket protocol between them are unchanged; see CHANGELOG.md.
+
 **Architecture:** the privileged part — scanning `/proc`, `ftruncate`,
 signals, `ptrace` — is a standalone C daemon (`hsedd`) that runs in the
 background or on demand and accepts commands over a Unix socket. `hsed` is
-the interactive TUI (Python/Textual), a thin client that connects to it.
-Python never touches `/proc`, `ftruncate`, `kill`, or `ptrace` directly —
-every privileged operation happens in `hsedd`.
+the interactive TUI, a thin client that connects to it. It never touches
+`/proc`, `ftruncate`, `kill`, or `ptrace` directly — every privileged
+operation happens in `hsedd`.
 
 ```
 ┌──────────────┐  SCAN / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
 │  hsed         │ ────────────────────────────────────────► │  hsedd (C daemon)      │
-│  (Python TUI) │            JSON-lines responses            │  /proc, ftruncate,     │
+│  (Go TUI)     │            JSON-lines responses            │  /proc, ftruncate,     │
 └──────────────┘ ◄──────────────────────────────────────── │  kill, ptrace(SEIZE)   │
                           Unix domain socket                 └───────────────────────┘
 ```
@@ -20,12 +25,12 @@ every privileged operation happens in `hsedd`.
 ## Install from releases
 
 ```bash
-sudo dpkg -i hsed_1.0.0_amd64.deb
+sudo dpkg -i hsed_1.1.0_amd64.deb
 ```
 
-That's it — `hsed` and `hsedd` both land on `PATH`. The Python TUI runs
-against a vendored copy of its dependencies bundled in the package, so
-nothing else needs to be installed (no pip, no internet access needed).
+That's it — `hsed` and `hsedd` both land on `PATH`. `hsed` is a static
+binary (`CGO_ENABLED=0`, no libc, no interpreter), so nothing else needs
+to be installed.
 
 Start the backend:
 
@@ -38,25 +43,23 @@ sudo hsedd --foreground              # stays attached (Ctrl-C to stop)
 Then just run:
 
 ```bash
-sudo hsed
+hsed
 ```
 
 ### Building the package yourself
 
 ```bash
-cd backend && make                       # builds hsedd
-cd ../packaging && ./build-deb.sh        # assembles + builds the .deb
-
-chmod +x ./build-deb.sh                  # if permission denied
-sudo ./build-deb.sh
-sudo dpkg -i hsed_1.0.0_amd64.deb
-sudo systemctl enable --now hsed  
-
+cd packaging
+chmod +x ./build-deb.sh   # if permission denied
+./build-deb.sh            # builds hsedd + hsed, assembles hsed_1.1.0_amd64.deb
+sudo dpkg -i hsed_1.1.0_amd64.deb
+sudo systemctl enable --now hsed
 ```
 
-See `packaging/build-deb.sh` for exactly what goes into the package (it's
-the same steps as above: compile `hsedd`, vendor the Python deps, lay out
-the `usr/`/`lib/` tree, `dpkg-deb --build`).
+Requires `gcc`/`make` (for `hsedd`) and Go >= 1.24 (for `hsed`); see
+`tui/go.mod` for a note about the `golang.org/x/*` → `github.com/golang/*`
+replace directives some restricted-network build environments need. See
+`packaging/build-deb.sh` for exactly what goes into the package.
 
 ## The problem it solves
 
@@ -68,6 +71,7 @@ fd is closed. `du` walks the directory tree, so it never sees these blocks.
 two is exactly this: unlinked-but-open files.
 
 Common causes:
+
 - a service logs to a file that got deleted by a naive cleanup cron/log
   rotation that didn't `HUP`/`USR1` the process afterward — it keeps
   writing into the void, forever growing
@@ -97,10 +101,10 @@ and exposes four more things over its socket protocol:
 ## Run the TUI
 
 ```bash
-sudo hsed
-sudo hsed --min-size 10485760      # only show entries >= 10MiB
-sudo hsed --pid 4821                # inspect one process only
-sudo hsed --socket /run/hsed.sock  # point at a non-default daemon
+hsed
+hsed -min-size 10485760      # only show entries >= 10MiB
+hsed -pid 4821                # inspect one process only
+hsed -socket /run/hsed.sock  # point at a non-default daemon
 ```
 
 `hsed` connects to `hsedd`'s socket — `$HSED_SOCKET`, else `/run/hsed.sock`
@@ -110,31 +114,28 @@ work with no data.
 
 ## Keybindings
 
-| Key     | Action                                            |
-|---------|------------------------------------------------------|
-| `r`     | Rescan immediately                                    |
-| `/`     | Filter table by process name or path substring        |
-| `Enter` | Open details + actions for the selected row            |
+| Key     | Action                                                                 |
+| ------- | ------------------------------------------------------------------------ |
+| `r`     | Rescan immediately                                                     |
+| `/`     | Filter table by process name or path substring                         |
+| `Enter` | Open details + actions for the selected row                            |
 | `v`     | Hidden filesystem tree view (paths reconstructed from deleted entries) |
-| `q`     | Quit                                                   |
+| `q`     | Quit                                                                   |
 
 Inside the detail panel:
 
 | Key   | Action                                              |
-|-------|--------------------------------------------------------|
-| `s`   | Stream live writes to this fd (ptrace, via hsedd)      |
-| `t`   | Truncate the hidden file, reclaim its space now        |
-| `h`   | Send SIGHUP, asking the process to reopen its files    |
-| `k`   | SIGKILL the process (type `KILL` to confirm)           |
-| `Esc` | Close                                                   |
+| ----- | ----------------------------------------------------- |
+| `s`   | Stream live writes to this fd (ptrace, via hsedd)   |
+| `t`   | Truncate the hidden file, reclaim its space now     |
+| `h`   | Send SIGHUP, asking the process to reopen its files |
+| `k`   | SIGKILL the process (type `KILL` to confirm)        |
+| `Esc` | Close                                               |
 
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/scan.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/truncated.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/hup.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/killing.png" width="80%"/></p>
+> Screenshots (`scan.png`, `truncated.png`, `hup.png`, `killing.png`) are
+> from the v1.0.0 Python TUI. The Go TUI looks and behaves the same way
+> (same layout, same keybindings) but the images haven't been retaken yet
+> — happy to swap them in once fresh ones exist.
 
 ## Important operational notes
 
@@ -185,6 +186,8 @@ If you want to drive `hsedd` from something other than this TUI, the wire
 format is a small newline-delimited text-command / JSON-lines-response
 protocol over the Unix socket — see `backend/src/protocol.h` for the exact
 schema (`SCAN`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`, `PING`, `QUIT`).
+`tui/client` is a small, self-contained reference implementation if you'd
+rather read Go than C.
 
 ## Uninstall
 
@@ -210,31 +213,39 @@ backend/                       # the C daemon (binary: hsedd)
 ├── systemd/hsed.service
 └── Makefile
 
-hidden_space_explorer/         # the Python TUI (thin client, command: hsed)
-├── client.py                   # HsedClient / StreamSession — talks to hsedd's socket
-├── app.py                      # Textual UI: table, tree view, detail modal, stream screen
-└── __main__.py                 # CLI entry point
+tui/                            # the Go TUI (single static binary, command: hsed)
+├── go.mod / go.sum
+├── main.go                       # CLI entry point
+├── client/                        # Client / StreamSession — talks to hsedd's socket
+└── ui/                             # bubbletea screens (table, detail, tree, stream, confirms)
 
 packaging/
-├── build-deb.sh                 # builds hsedd, vendors Python deps, assembles the .deb
-└── hsed_1.0.0_amd64/DEBIAN/     # control, postinst, postrm
+├── build-deb.sh                 # builds hsedd + hsed, assembles the .deb
+└── pkg-static/DEBIAN/            # control, postinst, postrm
 ```
+
+---
 
 # Hidden Space Explorer (Russian README)
 
 Инструмент для классического инцидента: «`df -h` показывает 100%, `du -sh` не находит ничего».
 
+**Заметка к v1.1.0:** TUI переписан с Python/Textual на Go
+(`charmbracelet/bubbletea`) — `hsed` теперь единственный статически
+слинкованный бинарник без единой рантайм-зависимости. Бэкенд на C (`hsedd`)
+и протокол между ними не изменились — см. CHANGELOG.md.
+
 **Архитектура:** привилегированная часть — сканирование `/proc`, `ftruncate`,
 сигналы, `ptrace` — представляет собой автономный демон на C (`hsedd`), который
 работает в фоне или по требованию и принимает команды через Unix-сокет. `hsed` —
-это интерактивный TUI (Python/Textual), тонкий клиент, который подключается к
-нему. Python никогда не обращается к `/proc`, `ftruncate`, `kill` или `ptrace`
-напрямую — все привилегированные операции выполняются в `hsedd`.
+это интерактивный TUI, тонкий клиент, который подключается к нему. Он никогда
+не обращается к `/proc`, `ftruncate`, `kill` или `ptrace` напрямую — все
+привилегированные операции выполняются в `hsedd`.
 
 ```
 ┌──────────────┐  SCAN / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
 │  hsed         │ ────────────────────────────────────────► │  hsedd (демон на C)    │
-│  (Python TUI) │            ответы в JSON-lines             │  /proc, ftruncate,     │
+│  (Go TUI)     │            ответы в JSON-lines             │  /proc, ftruncate,     │
 └──────────────┘ ◄──────────────────────────────────────── │  kill, ptrace(SEIZE)   │
                           Unix domain socket                 └───────────────────────┘
 ```
@@ -242,12 +253,12 @@ packaging/
 ## Установка с релизов
 
 ```bash
-sudo dpkg -i hsed_1.0.0_amd64.deb
+sudo dpkg -i hsed_1.1.0_amd64.deb
 ```
 
-Вот и всё — `hsed` и `hsedd` оказываются в `PATH`. Python TUI работает с
-вендорной копией своих зависимостей, входящей в состав пакета, поэтому
-ничего дополнительно устанавливать не нужно (ни pip, ни доступ в интернет).
+Вот и всё — `hsed` и `hsedd` оказываются в `PATH`. `hsed` — статический
+бинарник (`CGO_ENABLED=0`, без libc, без интерпретатора), поэтому ничего
+дополнительно устанавливать не нужно.
 
 Запуск бэкенда:
 
@@ -260,24 +271,23 @@ sudo hsedd --foreground              # остаётся прикреплённы
 Затем просто запустите:
 
 ```bash
-sudo hsed
+hsed
 ```
 
 ### Самостоятельная сборка пакета
 
 ```bash
-cd backend && make                       # собираем hsed
-cd ../packaging && ./build-deb.sh        # компоновка + сборка
-
-chmod +x ./build-deb.sh                  # если ошибка доступ запрещен
-sudo ./build-deb.sh
-sudo dpkg -i hsed_1.0.0_amd64.deb
-sudo systemctl enable --now hsed  
+cd packaging
+chmod +x ./build-deb.sh   # если ошибка "доступ запрещён"
+./build-deb.sh            # собирает hsedd + hsed, компонует hsed_1.1.0_amd64.deb
+sudo dpkg -i hsed_1.1.0_amd64.deb
+sudo systemctl enable --now hsed
 ```
 
-Подробности того, что попадает в пакет, смотрите в `packaging/build-deb.sh`
-(те же шаги, что и выше: скомпилировать `hsedd`, вендорить зависимости Python,
-разложить дерево `usr/`/`lib/`, `dpkg-deb --build`).
+Нужны `gcc`/`make` (для `hsedd`) и Go >= 1.24 (для `hsed`); про `replace`-
+директивы `golang.org/x/*` → `github.com/golang/*`, нужные в окружениях с
+ограниченным доступом к сети при сборке, см. `tui/go.mod`. Подробности того,
+что попадает в пакет, смотрите в `packaging/build-deb.sh`.
 
 ## Какую проблему решает инструмент
 
@@ -290,6 +300,7 @@ sudo systemctl enable --now hsed
 но открытые файлы.
 
 Распространённые причины:
+
 - сервис пишет логи в файл, который был удалён наивным кроном очистки или
   ротацией логов, не отправившей процессу `HUP`/`USR1` после этого — он
   продолжает писать в пустоту, бесконечно увеличиваясь в размере
@@ -321,10 +332,10 @@ sudo systemctl enable --now hsed
 ## Запуск TUI
 
 ```bash
-sudo hsed
-sudo hsed --min-size 10485760      # показать только записи размером >= 10 МиБ
-sudo hsed --pid 4821                # проверить только один процесс
-sudo hsed --socket /run/hsed.sock  # указать нестандартный сокет демона
+hsed
+hsed -min-size 10485760      # показать только записи размером >= 10 МиБ
+hsed -pid 4821                # проверить только один процесс
+hsed -socket /run/hsed.sock  # указать нестандартный сокет демона
 ```
 
 `hsed` подключается к сокету `hsedd` — `$HSED_SOCKET`, иначе `/run/hsed.sock`,
@@ -334,31 +345,28 @@ sudo hsed --socket /run/hsed.sock  # указать нестандартный �
 
 ## Горячие клавиши
 
-| Клавиша | Действие                                                     |
-|---------|--------------------------------------------------------------|
-| `r`     | Немедленно пересканировать                                    |
-| `/`     | Фильтровать таблицу по подстроке имени процесса или пути      |
-| `Enter` | Открыть детали + действия для выбранной строки                |
+| Клавиша | Действие                                                                     |
+| ------- | ------------------------------------------------------------------------------ |
+| `r`     | Немедленно пересканировать                                                   |
+| `/`     | Фильтровать таблицу по подстроке имени процесса или пути                     |
+| `Enter` | Открыть детали + действия для выбранной строки                               |
 | `v`     | Скрытое дерево файловой системы (пути, восстановленные из удалённых записей) |
-| `q`     | Выйти                                                         |
+| `q`     | Выйти                                                                        |
 
 Внутри панели деталей:
 
 | Клавиша | Действие                                                   |
-|---------|------------------------------------------------------------|
+| ------- | -------------------------------------------------------------- |
 | `s`     | Транслировать живую запись в этот fd (ptrace, через hsedd) |
 | `t`     | Обрезать скрытый файл, немедленно вернуть его место        |
 | `h`     | Отправить SIGHUP, попросив процесс переоткрыть свои файлы  |
-| `k`     | SIGKILL процессу (введите `KILL` для подтверждения)         |
-| `Esc`   | Закрыть                                                     |
+| `k`     | SIGKILL процессу (введите `KILL` для подтверждения)        |
+| `Esc`   | Закрыть                                                    |
 
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/scan.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/truncated.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/hup.png" width="80%"/></p>
-
-<p align="center"><img src="https://github.com/memspy/hsed/blob/main/killing.png" width="80%"/></p>
+> Скриншоты (`scan.png`, `truncated.png`, `hup.png`, `killing.png`) — от
+> Python TUI версии v1.0.0. Go TUI выглядит и ведёт себя так же (тот же
+> макет, те же горячие клавиши), но новые скриншоты ещё не переснимались —
+> заменю с радостью, как только появятся свежие.
 
 ## Важные эксплуатационные замечания
 
@@ -412,7 +420,8 @@ root/`CAP_SYS_PTRACE` — те же привилегии, которые уже 
 это небольшой протокол с текстовыми командами, разделяемыми переводом строки, и
 ответами в JSON-lines через Unix-сокет — точную схему смотрите в
 `backend/src/protocol.h` (`SCAN`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`, `PING`,
-`QUIT`).
+`QUIT`). `tui/client` — небольшая самодостаточная референсная реализация,
+если Go читать удобнее, чем C.
 
 ## Удаление
 
@@ -438,12 +447,13 @@ backend/                       # демон на C (бинарник: hsedd)
 ├── systemd/hsed.service
 └── Makefile
 
-hidden_space_explorer/         # Python TUI (тонкий клиент, команда: hsed)
-├── client.py                   # HsedClient / StreamSession — общается с сокетом hsedd
-├── app.py                      # Textual UI: таблица, вид дерева, модальное окно деталей, экран стрима
-└── __main__.py                 # точка входа CLI
+tui/                            # Go TUI (единственный статический бинарник, команда: hsed)
+├── go.mod / go.sum
+├── main.go                       # точка входа CLI
+├── client/                        # Client / StreamSession — общается с сокетом hsedd
+└── ui/                             # экраны bubbletea (таблица, детали, дерево, стрим, подтверждения)
 
 packaging/
-├── build-deb.sh                 # сборка hsedd, вендоринг зависимостей Python, компоновка .deb
-└── hsed_1.0.0_amd64/DEBIAN/     # control, postinst, postrm
+├── build-deb.sh                 # сборка hsedd + hsed, компоновка .deb
+└── pkg-static/DEBIAN/            # control, postinst, postrm
 ```

@@ -1,3 +1,4 @@
+
 CC      ?= gcc
 CFLAGS  ?= -Wall -Wextra -Werror -O2 -D_GNU_SOURCE -std=gnu11
 LDFLAGS ?= -pthread
@@ -25,7 +26,6 @@ $(BUILD_DIR):
 clean:
 	rm -rf $(BUILD_DIR) $(BIN)
 
-# Installs the binary + a systemd unit. Override PREFIX/UNITDIR as needed.
 PREFIX  ?= /usr
 UNITDIR ?= /etc/systemd/system
 

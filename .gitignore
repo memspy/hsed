@@ -4,24 +4,17 @@ backend/hsed
 *.o
 *.obj
 
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
+tui/hsed
+tui/hsed-static
+/tui/*.test
+/tui/*.prof
 
-packaging/vendor-build/
+
 packaging/hsed_*_amd64/
 packaging/*.deb
 packaging/*.buildinfo
 packaging/*.changes
+packaging/vendor-build/
 
 *.sock
 *.pid

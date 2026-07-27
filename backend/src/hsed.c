@@ -1,29 +1,3 @@
-/*
- * hsed.c — Hidden Space Explorer Daemon (binary name: hsedd).
- *
- * Finds files that were deleted (unlinked) but are still held open by a
- * process fd — the reason `df -h` can show a full disk while `du -sh`
- * finds nothing to account for it. Runs as a background service accepting
- * commands over a Unix domain socket, or on-demand for a single scan.
- *
- * The interactive command a user actually types is `hsed` (the Python TUI,
- * see ../../hidden_space_explorer/) — it talks to this daemon over the
- * socket. This binary is the privileged backend, not something you'd run
- * by hand day-to-day.
- *
- * Usage:
- *   hsedd                       run as a daemon (forks into the background)
- *   hsedd --foreground          run as a daemon, but stay attached (systemd
- *                              Type=simple, or convenient for debugging)
- *   hsedd --scan-once           print one JSON-lines scan to stdout and exit
- *                              (no socket, no daemon — for cron/scripts)
- *   hsedd --socket <path>       override the Unix socket path
- *   hsedd --pidfile <path>      override the pidfile path (daemon mode only)
- *   hsedd --max-capture <n>     bytes of write() payload STREAM previews
- *                              per event (default 200)
- *   hsedd --min-size <n>        with --scan-once, skip entries smaller than
- *                              n bytes
- */
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -160,8 +134,7 @@ int main(int argc, char **argv) {
             "anything you don't own. Run with sudo for full coverage.\n");
     }
 
-    /* SIGPIPE would otherwise kill us the instant a client disconnects
-     * mid-write; we handle short writes/EPIPE explicitly in protocol.c. */
+
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTERM, on_shutdown_signal);
     signal(SIGINT, on_shutdown_signal);

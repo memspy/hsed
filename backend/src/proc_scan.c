@@ -158,10 +158,6 @@ static int is_virtual_target(const char *path) {
            strcmp(path, "/dev/zero") == 0;
 }
 
-/* Scans one process's /proc/<pid>/fd directory and appends every
- * unlinked-but-open entry found to `out`. Returns 0 on success, including
- * when the process has no fd directory (already exited) or we lack
- * permission — those are not errors, just nothing to report. */
 static int scan_one_pid(hsed_list_t *out, pid_t pid, long long min_size) {
     char fd_dir[64];
     snprintf(fd_dir, sizeof(fd_dir), "/proc/%d/fd", (int)pid);

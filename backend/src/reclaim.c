@@ -19,10 +19,7 @@ int hsed_truncate_fd(pid_t pid, int fd, long long *freed_out,
         return -1;
     }
 
-    /* Opening the magic /proc symlink issues a fresh open(2) against the
-     * underlying (deleted) inode. Permission is checked against that
-     * inode's current mode/owner — it does NOT inherit whatever access the
-     * original process had when it first opened the file. */
+    
     int raw_fd = open(fd_path, O_WRONLY);
     if (raw_fd < 0) {
         snprintf(errbuf, errlen,

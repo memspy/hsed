@@ -25,10 +25,7 @@ typedef struct {
     size_t max_capture;
 } conn_args_t;
 
-/* -- line reading ---------------------------------------------------------
- * Commands are short and infrequent (this is a control channel, not a data
- * path), so a simple byte-at-a-time reader keeps the code obviously
- * correct rather than chasing buffering edge cases. */
+
 static ssize_t recv_line(int fd, char *buf, size_t bufsize) {
     size_t i = 0;
     for (;;) {
@@ -47,7 +44,6 @@ static ssize_t recv_line(int fd, char *buf, size_t bufsize) {
     }
 }
 
-/* -- command handlers ------------------------------------------------------ */
 static void handle_scan(int sockfd, long long min_size, pid_t only_pid) {
     hsed_list_t list;
     if (hsed_scan(&list, min_size, only_pid) != 0) {
@@ -88,12 +84,7 @@ static void handle_hup(int sockfd, pid_t pid) {
     hsed_send_linef(sockfd, "{\"type\":\"result\",\"ok\":true}");
 }
 
-/* Unlike HUP, this is not a request — SIGKILL cannot be caught, blocked,
- * or ignored, so the target terminates immediately with no chance to
- * clean up. The kernel releases every fd (and the disk blocks behind any
- * unlinked one) as part of normal process teardown, no different from any
- * other way the process might have died. hsed doesn't second-guess this
- * call — the TUI is where the "are you sure" belongs. */
+
 static void handle_kill(int sockfd, pid_t pid) {
     char err[256];
     if (hsed_send_signal(pid, SIGKILL, err, sizeof(err)) != 0) {
@@ -111,8 +102,6 @@ typedef struct {
     int fd;
 } stream_ctx_t;
 
-/* Runs between ptrace stops: checks whether the client is still there or
- * has asked us to stop. Returning 0 makes hsed_trace_fd() detach. */
 static int stream_poll_cb(void *arg) {
     stream_ctx_t *sc = (stream_ctx_t *)arg;
     char buf[256];
@@ -156,7 +145,6 @@ static void handle_stream(int sockfd, pid_t pid, int fd, size_t max_capture) {
     hsed_send_linef(sockfd, "{\"type\":\"stream_end\"}");
 }
 
-/* -- connection / command dispatch ----------------------------------------- */
 static void *handle_connection(void *arg) {
     conn_args_t *cargs = (conn_args_t *)arg;
     int sockfd = cargs->sockfd;
