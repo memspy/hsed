@@ -1,15 +1,4 @@
 #!/bin/sh
-# packaging/build-deb.sh — builds hsed_<version>_amd64.deb from a clean
-# checkout. Run from the packaging/ directory:
-#
-#   cd packaging && ./build-deb.sh
-#
-# Requires: gcc, make (for hsedd), go >= 1.24 (for hsed), dpkg-deb.
-# Needs network access to fetch Go module dependencies the first time
-# (only at build time — the resulting .deb is a static binary + a libc6-
-# linked daemon, fully self-contained, no network needed to install or
-# run). See tui/go.mod for a note on the golang.org/x/* replace
-# directives this environment needed.
 set -eu
 
 VERSION=1.1.0
@@ -39,10 +28,7 @@ install -m755 "$ROOT/tui/hsed" "$PKGROOT/usr/bin/hsed"
 install -m644 "$ROOT/backend/systemd/hsed.service" "$PKGROOT/lib/systemd/system/hsed.service"
 install -m644 "$ROOT/README.md" "$PKGROOT/usr/share/doc/hsed/README.md"
 
-# The small hand-written DEBIAN/{control,postinst,postrm} live in
-# packaging/pkg-static/, never inside $PKGROOT — this directory gets
-# rm -rf'd and rebuilt fresh every run, so anything meant to survive
-# across builds has to live outside it.
+
 STATIC="$HERE/pkg-static"
 if [ ! -f "$STATIC/DEBIAN/control" ]; then
     echo "error: $STATIC/DEBIAN/control is missing — packaging/pkg-static/" >&2
