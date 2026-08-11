@@ -1,7 +1,3 @@
-// Package client talks to the hsedd C daemon over its Unix domain socket
-// line protocol (see backend/src/protocol.h for the wire format this
-// mirrors). This is the only place in the TUI that knows about that
-// protocol — everything else works with HiddenEntry/WriteEvent values.
 package client
 
 import (
@@ -16,17 +12,13 @@ import (
 	"time"
 )
 
-// HsedError is returned for both transport failures (can't connect,
-// connection dropped mid-response) and {"type":"error",...} responses
-// from the daemon.
 type HsedError struct{ msg string }
 
 func (e *HsedError) Error() string { return e.msg }
 
 func errf(format string, a ...any) error { return &HsedError{fmt.Sprintf(format, a...)} }
 
-// DefaultSocketPath mirrors hsedd's own default: $HSED_SOCKET, else
-// /run/hsed.sock as root, else /tmp/hsed-<uid>.sock.
+
 func DefaultSocketPath() string {
 	if v := os.Getenv("HSED_SOCKET"); v != "" {
 		return v
@@ -37,7 +29,6 @@ func DefaultSocketPath() string {
 	return fmt.Sprintf("/tmp/hsed-%d.sock", os.Geteuid())
 }
 
-// HiddenEntry is one unlinked-but-open file descriptor, as reported by SCAN.
 type HiddenEntry struct {
 	PID      int    `json:"pid"`
 	FD       int    `json:"fd"`
@@ -54,11 +45,9 @@ type HiddenEntry struct {
 	Mtime    int64  `json:"mtime"`
 }
 
-// Key identifies an entry uniquely for the lifetime of one scan (a pid can
-// reuse an fd number after closing it, so this is not a durable ID).
+
 func (e HiddenEntry) Key() string { return fmt.Sprintf("%d:%d", e.PID, e.FD) }
 
-// WriteEvent is one captured write()/pwrite64()/writev() call from STREAM.
 type WriteEvent struct {
 	TID      int    `json:"tid"`
 	Ret      int64  `json:"ret"`
@@ -67,33 +56,28 @@ type WriteEvent struct {
 	DataB64  string `json:"data_b64"`
 }
 
-// Data decodes the captured payload preview. Errors decoding (which
-// shouldn't happen against a well-behaved daemon) yield an empty slice.
+
 func (w WriteEvent) Data() []byte {
 	b, _ := base64.StdEncoding.DecodeString(w.DataB64)
 	return b
 }
 
-// envelope is used to sniff a response's "type" before unmarshaling the
-// rest of it into a more specific struct — every response is small, so
-// the double-unmarshal cost is irrelevant on a control-plane socket.
+
 type envelope struct {
 	Type       string `json:"type"`
 	Message    string `json:"message"`
 	OK         bool   `json:"ok"`
 	Freed      int64  `json:"freed"`
 	TotalBytes int64  `json:"total_bytes"`
+	Count      int    `json:"count"`
 }
 
-// Client is cheap to use per-call — each method opens its own connection
-// (a local Unix socket connect is microseconds), which keeps the type
-// free of shared-state concurrency concerns.
+
 type Client struct {
 	SocketPath string
 	Timeout    time.Duration
 }
 
-// New returns a Client. An empty socketPath resolves via DefaultSocketPath.
 func New(socketPath string) *Client {
 	if socketPath == "" {
 		socketPath = DefaultSocketPath()
@@ -112,15 +96,12 @@ func (c *Client) connect() (net.Conn, error) {
 	return conn, nil
 }
 
-// readEnvelope reads one line and sniffs its type, returning the raw line
-// alongside so the caller can unmarshal into a more specific struct.
 func readEnvelope(r *bufio.Reader) (string, envelope, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
 		if line == "" {
 			return "", envelope{}, errf("connection closed unexpectedly")
 		}
-		// A final line with no trailing newline is still usable.
 	}
 	line = strings.TrimRight(line, "\r\n")
 	var env envelope
@@ -150,17 +131,22 @@ func (c *Client) Ping() error {
 	return nil
 }
 
-// Scan runs SCAN and returns every unlinked-but-open entry found, plus the
-// summed size the daemon reports. minSize <= 0 means no size filter;
-// onlyPID <= 0 means scan every process.
-func (c *Client) Scan(minSize int64, onlyPID int) ([]HiddenEntry, int64, error) {
+
+const UIDAny int64 = -1
+
+
+func (c *Client) Scan(minSize int64, onlyPID int, uidFilter int64) ([]HiddenEntry, int64, error) {
 	conn, err := c.connect()
 	if err != nil {
 		return nil, 0, err
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(c.Timeout))
-	if _, err := fmt.Fprintf(conn, "SCAN %d %d\n", minSize, onlyPID); err != nil {
+	cmd := fmt.Sprintf("SCAN %d %d", minSize, onlyPID)
+	if uidFilter != UIDAny {
+		cmd += fmt.Sprintf(" %d", uidFilter)
+	}
+	if _, err := fmt.Fprintf(conn, "%s\n", cmd); err != nil {
 		return nil, 0, errf("write failed: %v", err)
 	}
 
@@ -188,6 +174,34 @@ func (c *Client) Scan(minSize int64, onlyPID int) ([]HiddenEntry, int64, error) 
 	}
 }
 
+
+func (c *Client) Stats(minSize int64, uidFilter int64) (count int, totalBytes int64, err error) {
+	conn, err := c.connect()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(c.Timeout))
+	cmdStr := fmt.Sprintf("STATS %d", minSize)
+	if uidFilter != UIDAny {
+		cmdStr += fmt.Sprintf(" %d", uidFilter)
+	}
+	if _, err := fmt.Fprintf(conn, "%s\n", cmdStr); err != nil {
+		return 0, 0, errf("write failed: %v", err)
+	}
+	_, env, err := readEnvelope(bufio.NewReader(conn))
+	if err != nil {
+		return 0, 0, err
+	}
+	if env.Type == "error" {
+		return 0, 0, errf("%s", env.Message)
+	}
+	if env.Type != "stats" {
+		return 0, 0, errf("unexpected response type for STATS: %q", env.Type)
+	}
+	return env.Count, env.TotalBytes, nil
+}
+
 func (c *Client) simpleCommand(format string, a ...any) (envelope, error) {
 	conn, err := c.connect()
 	if err != nil {
@@ -208,8 +222,6 @@ func (c *Client) simpleCommand(format string, a ...any) (envelope, error) {
 	return env, nil
 }
 
-// Truncate reclaims the space behind pid's fd immediately, without
-// signaling or restarting the process. Returns the number of bytes freed.
 func (c *Client) Truncate(pid, fd int) (int64, error) {
 	env, err := c.simpleCommand("TRUNCATE %d %d", pid, fd)
 	if err != nil {
@@ -218,12 +230,12 @@ func (c *Client) Truncate(pid, fd int) (int64, error) {
 	return env.Freed, nil
 }
 
-// Hup asks pid to reopen its log files (SIGHUP) — the graceful request a
-// well-behaved daemon can act on, unlike Kill.
+
 func (c *Client) Hup(pid int) error {
 	_, err := c.simpleCommand("HUP %d", pid)
 	return err
 }
+
 
 func (c *Client) Kill(pid int) error {
 	_, err := c.simpleCommand("KILL %d", pid)
@@ -245,6 +257,7 @@ func (c *Client) OpenStream(pid, fd int) (*StreamSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	
 	if _, err := fmt.Fprintf(conn, "STREAM %d %d\n", pid, fd); err != nil {
 		conn.Close()
 		return nil, errf("could not start STREAM: %v", err)
@@ -278,7 +291,6 @@ func (s *StreamSession) Next() (*WriteEvent, error) {
 	}
 }
 
-
 func (s *StreamSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -295,7 +307,6 @@ type TreeNode struct {
 	Children map[string]*TreeNode
 	Entries  []HiddenEntry
 }
-
 
 func BuildPathTree(entries []HiddenEntry) *TreeNode {
 	root := &TreeNode{Children: map[string]*TreeNode{}}

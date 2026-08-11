@@ -17,6 +17,7 @@ type treeRow struct {
 	isDir bool
 }
 
+
 type TreeScreen struct {
 	client   *client.Client
 	root     *client.TreeNode

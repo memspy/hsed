@@ -2,10 +2,13 @@
 
 A tool for the classic "`df -h` says 100%, `du -sh` finds nothing" incident.
 
-**v1.1.0 note:** the TUI was rewritten from Python/Textual to Go
-(`charmbracelet/bubbletea`) — `hsed` is now a single statically-linked
-binary with zero runtime dependencies of its own. The C backend (`hsedd`)
-and the socket protocol between them are unchanged; see CHANGELOG.md.
+**v1.1.1 note:** a speed + universality pass on top of the v1.1.0 Go
+rewrite — SCAN now parallelizes across worker threads, STREAM follows
+every thread of a target process (not just the one you named) including
+threads created after streaming starts, `writev()` payloads are captured
+alongside plain `write()`, SCAN/STATS gained a uid filter, and there's a
+new lightweight STATS command for monitoring use. The backend also now
+cross-builds for aarch64. See CHANGELOG.md for the full list.
 
 **Architecture:** the privileged part — scanning `/proc`, `ftruncate`,
 signals, `ptrace` — is a standalone C daemon (`hsedd`) that runs in the
@@ -15,17 +18,17 @@ the interactive TUI, a thin client that connects to it. It never touches
 operation happens in `hsedd`.
 
 ```
-┌──────────────┐  SCAN / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
-│  hsed         │ ────────────────────────────────────────► │  hsedd (C daemon)      │
-│  (Go TUI)     │            JSON-lines responses            │  /proc, ftruncate,     │
-└──────────────┘ ◄──────────────────────────────────────── │  kill, ptrace(SEIZE)   │
-                          Unix domain socket                 └───────────────────────┘
+┌──────────────┐  SCAN / STATS / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
+│  hsed         │ ──────────────────────────────────────────────► │  hsedd (C daemon)      │
+│  (Go TUI)     │              JSON-lines responses                │  /proc, ftruncate,     │
+└──────────────┘ ◄────────────────────────────────────────────── │  kill, ptrace(SEIZE)   │
+                          Unix domain socket                       └───────────────────────┘
 ```
 
 ## Install from releases
 
 ```bash
-sudo dpkg -i hsed_1.1.0_amd64.deb
+sudo dpkg -i hsed_1.1.1_amd64.deb     # or hsed_1.1.1_arm64.deb
 ```
 
 That's it — `hsed` and `hsedd` both land on `PATH`. `hsed` is a static
@@ -50,9 +53,10 @@ hsed
 
 ```bash
 cd packaging
-chmod +x ./build-deb.sh   # if permission denied
-./build-deb.sh            # builds hsedd + hsed, assembles hsed_1.1.0_amd64.deb
-sudo dpkg -i hsed_1.1.0_amd64.deb
+chmod +x ./build-deb.sh    # if permission denied
+./build-deb.sh             # amd64 (default)
+./build-deb.sh arm64       # cross-build for aarch64, needs gcc-aarch64-linux-gnu
+sudo dpkg -i hsed_1.1.1_amd64.deb
 sudo systemctl enable --now hsed
 ```
 
@@ -82,9 +86,16 @@ Common causes:
 
 The only reliable way to find these is `/proc/<pid>/fd/*`, where the kernel
 suffixes the symlink target with ` (deleted)`. `hsedd` automates that scan
-and exposes four more things over its socket protocol:
+(in parallel across worker threads — see below) and exposes five more
+things over its socket protocol:
 
-- **`SCAN`** — walk `/proc`, list every unlinked-but-open fd
+- **`SCAN [min_size] [pid] [uid]`** — walk `/proc`, list every
+  unlinked-but-open fd; optionally restrict to one process or one uid
+- **`STATS [min_size] [uid]`** — the same matching logic as SCAN, but just
+  the headline `count`/`total_bytes` — skips all username/cmdline
+  resolution, so it costs meaningfully less on a host with many matching
+  fds. Meant for a monitoring check ("is more than 1GB hidden right now?")
+  that doesn't need the full breakdown.
 - **`TRUNCATE <pid> <fd>`** — reopen the same inode through
   `/proc/<pid>/fd/<fd>` and `ftruncate` it to zero, freeing the disk blocks
   immediately, without signaling, pausing, or restarting the process
@@ -96,14 +107,45 @@ and exposes four more things over its socket protocol:
   teardown. The TUI requires typing the word `KILL` to confirm — a single
   stray keypress can't trigger it.
 - **`STREAM <pid> <fd>`** — attach via `ptrace(PTRACE_SEIZE)` and stream,
-  live, exactly what bytes the process is writing into that fd right now
+  live, exactly what bytes are being written into that fd right now, from
+  *any* thread of the process — see below.
+
+## Multi-core scanning
+
+SCAN and STATS split the process list across worker threads (one
+`/proc/<pid>/fd` walk is independent of every other process's, so this
+scales close to linearly with core count on a host with many processes).
+Auto-detects the online CPU count by default; override with
+`hsedd --scan-threads N` (applies to both the daemon's socket commands and
+`--scan-once`/`--stats-once`). A uid filter (`--uid N` on the CLI, or the
+`uid` argument over the socket) is checked before opening a process's fd
+directory at all, so filtering to one user on a multi-tenant host skips
+the expensive per-fd work entirely for everyone else.
+
+## Multi-threaded STREAM
+
+STREAM follows every thread of the target process, including ones created
+*after* streaming starts — equivalent to `strace -f`. Since threads created
+via pthreads share one fd table (`CLONE_FILES`), any thread can be the one
+actually calling `write()` on the fd you asked about; a single-threaded
+tracer (v1.1.0 and earlier) would silently miss writes from any thread
+other than the one whose PID/TID you happened to pass. Pass the process's
+main PID (what `/proc/<pid>/task` lists as the thread-group leader) to
+follow the whole process; pass a specific thread's TID (found the same
+way) to narrow tracing to just that one thread.
+
+`writev()` calls are also captured now, not just plain `write()`/
+`pwrite64()` — the payload preview is reassembled from up to the first 16
+iovec segments, concatenated in order, capped at the usual preview size
+limit.
 
 ## Run the TUI
 
 ```bash
 hsed
 hsed -min-size 10485760      # only show entries >= 10MiB
-hsed -pid 4821                # inspect one process only
+hsed -pid 4821                 # inspect one process only
+hsed -uid 1000                  # only that uid's hidden files
 hsed -socket /run/hsed.sock  # point at a non-default daemon
 ```
 
@@ -158,19 +200,22 @@ binary/version against a staging replica first.
 
 **Streaming uses ptrace.** `hsedd` attaches with `PTRACE_SEIZE` (which,
 unlike `PTRACE_ATTACH`, doesn't stop the target as a side effect) and only
-interrupts it briefly on each traced `write`/`pwrite64`/`writev` syscall —
-for a typical daemon this is not noticeable, but for latency-sensitive
-workloads it can matter. It requires root or `CAP_SYS_PTRACE`, and depends
-on `/proc/sys/kernel/yama/ptrace_scope` allowing the attach (root is
-unaffected by this setting).
+interrupts each thread briefly on its traced `write`/`pwrite64`/`writev`
+syscalls — for a typical daemon this is not noticeable, but for
+latency-sensitive workloads it can matter. It requires root or
+`CAP_SYS_PTRACE`, and depends on `/proc/sys/kernel/yama/ptrace_scope`
+allowing the attach (root is unaffected by this setting).
 
-**Streaming scope in this version:** x86_64 only, and it traces exactly the
-PID/TID you give it — it does not follow `clone()`'d threads the way
-`strace -f` does. If the fd could be written by a different thread of a
-multi-threaded target, find that thread's TID under `/proc/<pid>/task/` and
-pass it as the pid instead. `writev()` calls are reported (syscall +
-length) but the payload preview isn't captured in this version — plain
-`write()`/`pwrite64()` are.
+**Architecture support:** x86_64 is implemented and verified on real
+hardware, including under real load (repeated rapid attach/detach cycles,
+multi-threaded targets, dynamic thread creation). aarch64 has its own
+register-access code path (see `backend/src/tracer.c`) and cross-builds
+cleanly; SCAN/TRUNCATE/HUP/KILL/STATS have been exercised under QEMU
+user-mode emulation against real processes and work correctly there, but
+QEMU user-mode's ptrace emulation is known to be unreliable for exactly
+the kind of syscall-stepping STREAM does, so the STREAM path specifically
+has **not** been confirmed on real ARM64 hardware yet — if you try it on
+actual aarch64 hardware, reports (either way) are genuinely useful.
 
 **This tool only detects and lets you act on already-open fds.** It does
 not detect rootkits, hook the kernel, or hide/unhide anything itself — it's
@@ -185,9 +230,9 @@ already grant — the same privileges `strace -p` and `gdb -p` already need.
 If you want to drive `hsedd` from something other than this TUI, the wire
 format is a small newline-delimited text-command / JSON-lines-response
 protocol over the Unix socket — see `backend/src/protocol.h` for the exact
-schema (`SCAN`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`, `PING`, `QUIT`).
-`tui/client` is a small, self-contained reference implementation if you'd
-rather read Go than C.
+schema (`SCAN`, `STATS`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`, `PING`,
+`QUIT`). `tui/client` is a small, self-contained reference implementation
+if you'd rather read Go than C.
 
 ## Uninstall
 
@@ -202,16 +247,17 @@ sudo dpkg -P hsed                    # remove + purge runtime socket/pidfile
 ```
 backend/                       # the C daemon (binary: hsedd)
 ├── src/
-│   ├── proc_scan.c/.h          # /proc/*/fd walk -> hsed_entry_t list
+│   ├── proc_scan.c/.h          # /proc/*/fd walk -> hsed_entry_t list, parallel + uid-filtered
 │   ├── reclaim.c/.h            # ftruncate via /proc/pid/fd/N, kill(sig)
-│   ├── tracer.c/.h             # ptrace(SEIZE/INTERRUPT) live write streamer (x86_64)
+│   ├── tracer.c/.h             # ptrace(SEIZE/INTERRUPT) live write streamer,
+│   │                            # multi-thread following, writev capture (x86_64 + aarch64)
 │   ├── protocol.c/.h           # JSON-lines formatting, line I/O helpers
 │   ├── server.c/.h             # Unix socket accept loop, one thread per connection
 │   ├── base64.c/.h             # binary-safe transport for captured write() bytes
 │   ├── util.c/.h                # logging, small string helpers
 │   └── hsed.c                   # main(): args, daemonization, signal handling
 ├── systemd/hsed.service
-└── Makefile
+└── Makefile                     # `make` (native) / `make arm64` (cross-build)
 
 tui/                            # the Go TUI (single static binary, command: hsed)
 ├── go.mod / go.sum
@@ -220,7 +266,7 @@ tui/                            # the Go TUI (single static binary, command: hse
 └── ui/                             # bubbletea screens (table, detail, tree, stream, confirms)
 
 packaging/
-├── build-deb.sh                 # builds hsedd + hsed, assembles the .deb
+├── build-deb.sh                 # builds hsedd + hsed, assembles the .deb (amd64 or arm64)
 └── pkg-static/DEBIAN/            # control, postinst, postrm
 ```
 
@@ -230,10 +276,14 @@ packaging/
 
 Инструмент для классического инцидента: «`df -h` показывает 100%, `du -sh` не находит ничего».
 
-**Заметка к v1.1.0:** TUI переписан с Python/Textual на Go
-(`charmbracelet/bubbletea`) — `hsed` теперь единственный статически
-слинкованный бинарник без единой рантайм-зависимости. Бэкенд на C (`hsedd`)
-и протокол между ними не изменились — см. CHANGELOG.md.
+**Заметка к v1.1.1:** проход на ускорение и универсальность поверх Go-версии
+v1.1.0 — `SCAN` теперь распараллеливается по рабочим потокам, `STREAM`
+следит за **всеми** потоками целевого процесса (не только тем, что вы
+указали), включая потоки, созданные уже после начала трансляции, полезная
+нагрузка `writev()` захватывается наравне с обычным `write()`, `SCAN`/`STATS`
+получили фильтр по uid, добавлена лёгкая команда `STATS` для мониторинга.
+Бэкенд также теперь кросс-собирается под aarch64. Полный список — в
+CHANGELOG.md.
 
 **Архитектура:** привилегированная часть — сканирование `/proc`, `ftruncate`,
 сигналы, `ptrace` — представляет собой автономный демон на C (`hsedd`), который
@@ -243,17 +293,17 @@ packaging/
 привилегированные операции выполняются в `hsedd`.
 
 ```
-┌──────────────┐  SCAN / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
-│  hsed         │ ────────────────────────────────────────► │  hsedd (демон на C)    │
-│  (Go TUI)     │            ответы в JSON-lines             │  /proc, ftruncate,     │
-└──────────────┘ ◄──────────────────────────────────────── │  kill, ptrace(SEIZE)   │
-                          Unix domain socket                 └───────────────────────┘
+┌──────────────┐  SCAN / STATS / TRUNCATE / HUP / KILL / STREAM   ┌───────────────────────┐
+│  hsed         │ ──────────────────────────────────────────────► │  hsedd (демон на C)    │
+│  (Go TUI)     │              ответы в JSON-lines                 │  /proc, ftruncate,     │
+└──────────────┘ ◄────────────────────────────────────────────── │  kill, ptrace(SEIZE)   │
+                          Unix domain socket                       └───────────────────────┘
 ```
 
 ## Установка с релизов
 
 ```bash
-sudo dpkg -i hsed_1.1.0_amd64.deb
+sudo dpkg -i hsed_1.1.1_amd64.deb     # или hsed_1.1.1_arm64.deb
 ```
 
 Вот и всё — `hsed` и `hsedd` оказываются в `PATH`. `hsed` — статический
@@ -278,9 +328,10 @@ hsed
 
 ```bash
 cd packaging
-chmod +x ./build-deb.sh   # если ошибка "доступ запрещён"
-./build-deb.sh            # собирает hsedd + hsed, компонует hsed_1.1.0_amd64.deb
-sudo dpkg -i hsed_1.1.0_amd64.deb
+chmod +x ./build-deb.sh    # если ошибка "доступ запрещён"
+./build-deb.sh              # amd64 (по умолчанию)
+./build-deb.sh arm64        # кросс-сборка под aarch64, нужен gcc-aarch64-linux-gnu
+sudo dpkg -i hsed_1.1.1_amd64.deb
 sudo systemctl enable --now hsed
 ```
 
@@ -311,9 +362,16 @@ sudo systemctl enable --now hsed
 
 Единственный надёжный способ найти их — `/proc/<pid>/fd/*`, где ядро добавляет
 к цели симлинка суффикс ` (deleted)`. `hsedd` автоматизирует это сканирование
-и предоставляет ещё четыре возможности через свой сокетный протокол:
+(параллельно по рабочим потокам — см. ниже) и предоставляет ещё пять
+возможностей через свой сокетный протокол:
 
-- **`SCAN`** — обойти `/proc`, перечислить каждый удалённый-но-открытый fd
+- **`SCAN [min_size] [pid] [uid]`** — обойти `/proc`, перечислить каждый
+  удалённый-но-открытый fd; опционально ограничить одним процессом или uid
+- **`STATS [min_size] [uid]`** — та же логика сопоставления, что у `SCAN`, но
+  только сводные `count`/`total_bytes` — пропускает разрешение
+  имени пользователя/cmdline, поэтому стоит заметно дешевле на хосте со
+  множеством подходящих fd. Предназначена для проверки мониторингом («скрыто
+  ли сейчас больше 1ГБ?»), которой не нужна полная разбивка.
 - **`TRUNCATE <pid> <fd>`** — переоткрыть тот же inode через
   `/proc/<pid>/fd/<fd>` и обрезать его до нуля с помощью `ftruncate`,
   немедленно освобождая дисковые блоки, без сигналов, паузы или перезапуска
@@ -326,15 +384,45 @@ sudo systemctl enable --now hsed
   процедуры завершения процесса. TUI требует ввода слова `KILL` для
   подтверждения — случайное нажатие клавиши не может активировать его.
 - **`STREAM <pid> <fd>`** — подключиться через `ptrace(PTRACE_SEIZE)` и
-  транслировать в реальном времени, какие именно байты процесс записывает
-  в этот fd прямо сейчас
+  транслировать в реальном времени, какие именно байты записываются
+  в этот fd прямо сейчас, из **любого** потока процесса — см. ниже.
+
+## Многоядерное сканирование
+
+`SCAN` и `STATS` делят список процессов между рабочими потоками (обход
+`/proc/<pid>/fd` одного процесса не зависит от любого другого, поэтому это
+масштабируется почти линейно с числом ядер на хосте со множеством
+процессов). По умолчанию автоопределяет число онлайн-CPU; переопределяется
+через `hsedd --scan-threads N` (применяется и к сокетным командам демона, и
+к `--scan-once`/`--stats-once`). Фильтр по uid (`--uid N` в CLI, или
+аргумент `uid` через сокет) проверяется до открытия каталога fd процесса
+вообще, поэтому фильтрация по одному пользователю на мультитенантном хосте
+полностью пропускает дорогую работу по каждому fd для всех остальных.
+
+## Многопоточный STREAM
+
+`STREAM` теперь следит за каждым потоком целевого процесса, включая
+созданные **после** начала трансляции — эквивалент `strace -f`. Поскольку
+потоки, созданные через pthreads, разделяют одну таблицу fd (`CLONE_FILES`),
+записывать в интересующий вас fd может любой поток; однопоточный трейсер
+(v1.1.0 и раньше) молча пропускал бы записи от любого потока, кроме того,
+чей PID/TID вы случайно указали. Передайте основной PID процесса (то, что
+`/proc/<pid>/task` перечисляет как лидера группы потоков), чтобы следить за
+всем процессом; передайте TID конкретного потока (найденный тем же
+способом), чтобы сузить трассировку до одного потока.
+
+Вызовы `writev()` теперь тоже захватываются, а не только обычные
+`write()`/`pwrite64()` — предпросмотр полезной нагрузки собирается из первых
+до 16 сегментов iovec, склеенных по порядку, с тем же ограничением на размер
+предпросмотра.
 
 ## Запуск TUI
 
 ```bash
 hsed
 hsed -min-size 10485760      # показать только записи размером >= 10 МиБ
-hsed -pid 4821                # проверить только один процесс
+hsed -pid 4821                 # проверить только один процесс
+hsed -uid 1000                  # только скрытые файлы этого uid
 hsed -socket /run/hsed.sock  # указать нестандартный сокет демона
 ```
 
@@ -391,19 +479,23 @@ hsed -socket /run/hsed.sock  # указать нестандартный сок�
 
 **Стриминг использует ptrace.** `hsedd` подключается с `PTRACE_SEIZE` (который,
 в отличие от `PTRACE_ATTACH`, не останавливает цель как побочный эффект) и лишь
-кратковременно прерывает её на каждом трассируемом системном вызове
+кратковременно прерывает каждый поток на его трассируемых системных вызовах
 `write`/`pwrite64`/`writev` — для типичного демона это незаметно, но для
 чувствительных к задержкам рабочих нагрузок может иметь значение. Требуется
 root или `CAP_SYS_PTRACE`, а также `/proc/sys/kernel/yama/ptrace_scope`,
 разрешающая подключение (на root эта настройка не влияет).
 
-**Область стриминга в этой версии:** только x86_64, и трассируется ровно тот
-PID/TID, который вы указали — он не следует за потоками, созданными `clone()`,
-в отличие от `strace -f`. Если fd может быть записан другим потоком
-многопоточной цели, найдите TID этого потока в `/proc/<pid>/task/` и передайте
-его как pid. Вызовы `writev()` сообщаются (системный вызов + длина), но
-предпросмотр полезной нагрузки не захватывается в этой версии — обычные
-`write()`/`pwrite64()` захватываются.
+**Поддержка архитектур:** x86_64 реализован и проверен на реальном железе,
+включая под реальной нагрузкой (повторяющиеся быстрые циклы подключения/
+отключения, многопоточные цели, динамическое создание потоков). aarch64
+имеет собственную ветку доступа к регистрам (см. `backend/src/tracer.c`) и
+чисто кросс-компилируется; `SCAN`/`TRUNCATE`/`HUP`/`KILL`/`STATS` проверены
+под эмуляцией QEMU user-mode на реальных процессах и работают там корректно,
+но эмуляция ptrace в QEMU user-mode известна своей ненадёжностью именно для
+такого пошагового отслеживания системных вызовов, которым занимается
+`STREAM`, поэтому именно путь `STREAM` **не** подтверждён на реальном железе
+ARM64 — если попробуете на настоящем aarch64-железе, отчёт (в любую сторону)
+будет по-настоящему полезен.
 
 **Этот инструмент только обнаруживает и позволяет действовать на уже открытые
 fd.** Он не обнаруживает руткиты, не перехватывает ядро и не скрывает/показывает
@@ -419,9 +511,9 @@ root/`CAP_SYS_PTRACE` — те же привилегии, которые уже 
 Если вы хотите управлять `hsedd` не из этого TUI, формат передачи данных —
 это небольшой протокол с текстовыми командами, разделяемыми переводом строки, и
 ответами в JSON-lines через Unix-сокет — точную схему смотрите в
-`backend/src/protocol.h` (`SCAN`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`, `PING`,
-`QUIT`). `tui/client` — небольшая самодостаточная референсная реализация,
-если Go читать удобнее, чем C.
+`backend/src/protocol.h` (`SCAN`, `STATS`, `TRUNCATE`, `HUP`, `KILL`, `STREAM`,
+`PING`, `QUIT`). `tui/client` — небольшая самодостаточная референсная
+реализация, если Go читать удобнее, чем C.
 
 ## Удаление
 
@@ -436,16 +528,17 @@ sudo dpkg -P hsed                    # удалить + очистить сок�
 ```
 backend/                       # демон на C (бинарник: hsedd)
 ├── src/
-│   ├── proc_scan.c/.h          # обход /proc/*/fd -> список hsed_entry_t
+│   ├── proc_scan.c/.h          # обход /proc/*/fd -> список hsed_entry_t, параллельно + фильтр по uid
 │   ├── reclaim.c/.h            # ftruncate через /proc/pid/fd/N, kill(sig)
-│   ├── tracer.c/.h             # ptrace(SEIZE/INTERRUPT) стример живой записи (x86_64)
+│   ├── tracer.c/.h             # ptrace(SEIZE/INTERRUPT) стример живой записи,
+│   │                            # слежение за потоками, захват writev (x86_64 + aarch64)
 │   ├── protocol.c/.h           # форматирование JSON-lines, помощники строкового ввода-вывода
 │   ├── server.c/.h             # цикл приёма Unix-сокета, по одному потоку на соединение
 │   ├── base64.c/.h             # бинарно-безопасная передача захваченных байтов write()
 │   ├── util.c/.h                # логирование, небольшие строковые помощники
 │   └── hsed.c                   # main(): аргументы, демонизация, обработка сигналов
 ├── systemd/hsed.service
-└── Makefile
+└── Makefile                     # `make` (нативно) / `make arm64` (кросс-сборка)
 
 tui/                            # Go TUI (единственный статический бинарник, команда: hsed)
 ├── go.mod / go.sum
@@ -454,6 +547,6 @@ tui/                            # Go TUI (единственный статич�
 └── ui/                             # экраны bubbletea (таблица, детали, дерево, стрим, подтверждения)
 
 packaging/
-├── build-deb.sh                 # сборка hsedd + hsed, компоновка .deb
+├── build-deb.sh                 # сборка hsedd + hsed, компоновка .deb (amd64 или arm64)
 └── pkg-static/DEBIAN/            # control, postinst, postrm
 ```

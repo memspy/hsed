@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "proc_scan.h"
 
+
 void hsed_json_escape(char *dst, size_t dstsize, const char *src);
 
 void hsed_format_entry(const hsed_entry_t *e, char *out, size_t outsize);

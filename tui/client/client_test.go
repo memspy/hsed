@@ -33,7 +33,7 @@ func TestFullClientLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, _, err := c.Scan(0, os.Getpid())
+	entries, _, err := c.Scan(0, os.Getpid(), UIDAny)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -105,6 +105,55 @@ time.sleep(10)
 
 	if err := c.Ping(); err != nil {
 		t.Fatalf("daemon unhealthy after full command sequence: %v", err)
+	}
+}
+
+func TestStatsAndUIDFilter(t *testing.T) {
+	c := New(testSocket)
+
+	tmp, err := os.CreateTemp("", "hsed_go_stats_*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tmp.Close()
+	if _, err := tmp.Write(make([]byte, 8080)); err != nil {
+		t.Fatal(err)
+	}
+	tmp.Sync()
+	if err := os.Remove(tmp.Name()); err != nil {
+		t.Fatal(err)
+	}
+
+	count, total, err := c.Stats(0, 0) // uid 0 (root) — this test process's own uid
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if count < 1 || total < 8080 {
+		t.Fatalf("Stats undercounted: count=%d total=%d, expected at least our own 8080-byte entry", count, total)
+	}
+
+	excluded, _, err := c.Scan(0, os.Getpid(), 65534)
+	if err != nil {
+		t.Fatalf("Scan with uid filter: %v", err)
+	}
+	for _, e := range excluded {
+		if e.Size == 8080 {
+			t.Fatalf("uid filter 65534 should have excluded our (uid 0) entry, but found it: %+v", e)
+		}
+	}
+
+	included, _, err := c.Scan(0, os.Getpid(), 0)
+	if err != nil {
+		t.Fatalf("Scan with matching uid filter: %v", err)
+	}
+	found := false
+	for _, e := range included {
+		if e.Size == 8080 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("uid filter 0 should have included our entry, got: %+v", included)
 	}
 }
 

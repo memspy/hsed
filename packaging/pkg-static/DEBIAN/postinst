@@ -1,8 +1,3 @@
-#!/bin/sh
-# postinst for hsed — deliberately does NOT enable or start the service
-# automatically: hsedd typically runs as root with CAP_SYS_PTRACE, and an
-# admin should opt into that rather than have a package install silently
-# turn it on.
 set -e
 
 if [ "$1" = "configure" ]; then
