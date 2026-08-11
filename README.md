@@ -174,10 +174,10 @@ Inside the detail panel:
 | `k`   | SIGKILL the process (type `KILL` to confirm)        |
 | `Esc` | Close                                               |
 
-> Screenshots (`scan.png`, `truncated.png`, `hup.png`, `killing.png`) are
-> from the v1.0.0 Python TUI. The Go TUI looks and behaves the same way
-> (same layout, same keybindings) but the images haven't been retaken yet
-> — happy to swap them in once fresh ones exist.
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/tui.png" width="50%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/stream.png" width="50%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/truncated.png" width="60%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/sigkill.png" width="50%"/></p>
 
 ## Important operational notes
 
@@ -451,10 +451,11 @@ hsed -socket /run/hsed.sock  # указать нестандартный сок�
 | `k`     | SIGKILL процессу (введите `KILL` для подтверждения)        |
 | `Esc`   | Закрыть                                                    |
 
-> Скриншоты (`scan.png`, `truncated.png`, `hup.png`, `killing.png`) — от
-> Python TUI версии v1.0.0. Go TUI выглядит и ведёт себя так же (тот же
-> макет, те же горячие клавиши), но новые скриншоты ещё не переснимались —
-> заменю с радостью, как только появятся свежие.
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/tui.png" width="50%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/stream.png" width="50%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/truncated.png" width="60%"/></p>
+<p align="center"><img src="https://github.com/memspy/hsed/blob/main/sigkill.png" width="50%"/></p>
+
 
 ## Важные эксплуатационные замечания
 
