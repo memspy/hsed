@@ -6,18 +6,18 @@ import (
 	"hsed/tui/client"
 )
 
+
 type Screen interface {
 	Init() tea.Cmd
 	Update(msg tea.Msg) (Screen, tea.Cmd)
 	View() string
-	// Resize is called whenever the terminal size changes (including once,
-	// right when the screen is pushed, so it starts with a valid size).
 	Resize(width, height int)
 }
 
 type pushMsg struct{ screen Screen }
 
 type popMsg struct{ result any }
+
 
 type resultMsg struct{ value any }
 
@@ -90,6 +90,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) View() string {
 	return a.top().View()
 }
+
 
 type Closer interface{ CloseSession() }
 

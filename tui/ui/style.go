@@ -3,13 +3,13 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorAccent    = lipgloss.Color("14")  // bright cyan
-	colorAccentDim = lipgloss.Color("6")   // cyan
-	colorText      = lipgloss.Color("252") // near-white
-	colorMuted     = lipgloss.Color("242") // gray
-	colorDanger    = lipgloss.Color("203") // red
-	colorWarn      = lipgloss.Color("221") // yellow
-	colorPanelBG   = lipgloss.Color("235") // dark gray panel background
+	colorAccent    = lipgloss.Color("14")  
+	colorAccentDim = lipgloss.Color("6")   
+	colorText      = lipgloss.Color("252") 
+	colorMuted     = lipgloss.Color("242") 
+	colorDanger    = lipgloss.Color("203") 
+	colorWarn      = lipgloss.Color("221") 
+	colorPanelBG   = lipgloss.Color("235") 
 	lipglossBlack  = lipgloss.Color("0")
 )
 

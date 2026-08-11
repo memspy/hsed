@@ -23,15 +23,15 @@
 typedef struct {
     int sockfd;
     size_t max_capture;
+    int scan_threads;
 } conn_args_t;
-
 
 static ssize_t recv_line(int fd, char *buf, size_t bufsize) {
     size_t i = 0;
     for (;;) {
         char c;
         ssize_t n = recv(fd, &c, 1, 0);
-        if (n == 0) return -1;              /* peer closed */
+        if (n == 0) return -1;              
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -40,13 +40,14 @@ static ssize_t recv_line(int fd, char *buf, size_t bufsize) {
             buf[i] = '\0';
             return (ssize_t)i;
         }
-        if (i + 1 < bufsize) buf[i++] = c;   /* silently drop overflow chars */
+        if (i + 1 < bufsize) buf[i++] = c;   
     }
 }
 
-static void handle_scan(int sockfd, long long min_size, pid_t only_pid) {
+static void handle_scan(int sockfd, long long min_size, pid_t only_pid,
+                         uid_t uid_filter, int scan_threads) {
     hsed_list_t list;
-    if (hsed_scan(&list, min_size, only_pid) != 0) {
+    if (hsed_scan(&list, min_size, only_pid, uid_filter, scan_threads) != 0) {
         hsed_send_linef(sockfd, "{\"type\":\"error\",\"message\":\"scan failed: %s\"}", strerror(errno));
         return;
     }
@@ -59,6 +60,16 @@ static void handle_scan(int sockfd, long long min_size, pid_t only_pid) {
     }
     hsed_send_linef(sockfd, "{\"type\":\"end\",\"count\":%zu,\"total_bytes\":%lld}", list.count, total);
     hsed_list_free(&list);
+}
+
+static void handle_stats(int sockfd, long long min_size, uid_t uid_filter, int scan_threads) {
+    hsed_stats_t stats;
+    if (hsed_scan_stats(&stats, min_size, uid_filter, scan_threads) != 0) {
+        hsed_send_linef(sockfd, "{\"type\":\"error\",\"message\":\"stats scan failed: %s\"}", strerror(errno));
+        return;
+    }
+    hsed_send_linef(sockfd, "{\"type\":\"stats\",\"count\":%zu,\"total_bytes\":%lld}",
+                     stats.count, stats.total_bytes);
 }
 
 static void handle_truncate(int sockfd, pid_t pid, int fd) {
@@ -101,6 +112,7 @@ typedef struct {
     pid_t pid;
     int fd;
 } stream_ctx_t;
+
 
 static int stream_poll_cb(void *arg) {
     stream_ctx_t *sc = (stream_ctx_t *)arg;
@@ -149,12 +161,13 @@ static void *handle_connection(void *arg) {
     conn_args_t *cargs = (conn_args_t *)arg;
     int sockfd = cargs->sockfd;
     size_t max_capture = cargs->max_capture;
+    int scan_threads = cargs->scan_threads;
     free(cargs);
 
     char line[512];
     for (;;) {
         ssize_t n = recv_line(sockfd, line, sizeof(line));
-        if (n < 0) break; /* disconnected */
+        if (n < 0) break; 
 
         char *save = NULL;
         char *cmd = strtok_r(line, " \t\r\n", &save);
@@ -167,9 +180,17 @@ static void *handle_connection(void *arg) {
         } else if (strcasecmp(cmd, "SCAN") == 0) {
             char *a1 = strtok_r(NULL, " \t\r\n", &save);
             char *a2 = strtok_r(NULL, " \t\r\n", &save);
+            char *a3 = strtok_r(NULL, " \t\r\n", &save);
             long long min_size = a1 ? atoll(a1) : 0;
             pid_t only_pid = a2 ? (pid_t)atol(a2) : 0;
-            handle_scan(sockfd, min_size, only_pid);
+            uid_t uid_filter = a3 ? (uid_t)strtoul(a3, NULL, 10) : HSED_UID_ANY;
+            handle_scan(sockfd, min_size, only_pid, uid_filter, scan_threads);
+        } else if (strcasecmp(cmd, "STATS") == 0) {
+            char *a1 = strtok_r(NULL, " \t\r\n", &save);
+            char *a2 = strtok_r(NULL, " \t\r\n", &save);
+            long long min_size = a1 ? atoll(a1) : 0;
+            uid_t uid_filter = a2 ? (uid_t)strtoul(a2, NULL, 10) : HSED_UID_ANY;
+            handle_stats(sockfd, min_size, uid_filter, scan_threads);
         } else if (strcasecmp(cmd, "TRUNCATE") == 0) {
             char *a1 = strtok_r(NULL, " \t\r\n", &save);
             char *a2 = strtok_r(NULL, " \t\r\n", &save);
@@ -209,9 +230,9 @@ static void *handle_connection(void *arg) {
     return NULL;
 }
 
-int hsed_server_run(const char *socket_path, size_t max_capture,
+int hsed_server_run(const char *socket_path, size_t max_capture, int scan_threads,
                      volatile sig_atomic_t *shutdown_flag) {
-    unlink(socket_path); /* remove a stale socket left by a previous run */
+    unlink(socket_path); 
 
     int listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listen_fd < 0) {
@@ -229,8 +250,7 @@ int hsed_server_run(const char *socket_path, size_t max_capture,
         close(listen_fd);
         return -1;
     }
-    /* Root-only by default. Widen this (e.g. chmod 0660 + chgrp to an ops
-     * group) if the whole team should be able to drive the daemon. */
+    
     chmod(socket_path, 0600);
 
     if (listen(listen_fd, 16) != 0) {
@@ -261,6 +281,7 @@ int hsed_server_run(const char *socket_path, size_t max_capture,
         if (!cargs) { close(client_fd); continue; }
         cargs->sockfd = client_fd;
         cargs->max_capture = max_capture;
+        cargs->scan_threads = scan_threads;
 
         pthread_t tid;
         if (pthread_create(&tid, NULL, handle_connection, cargs) != 0) {

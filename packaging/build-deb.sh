@@ -1,19 +1,29 @@
 #!/bin/sh
 set -eu
 
-VERSION=1.1.0
-ARCH=amd64
+VERSION=1.1.1
 PKG=hsed
+ARCH="${1:-amd64}"
+
+case "$ARCH" in
+    amd64) CC=gcc; GOARCH=amd64 ;;
+    arm64) CC=aarch64-linux-gnu-gcc; GOARCH=arm64 ;;
+    *)
+        echo "usage: $0 [amd64|arm64]" >&2
+        exit 2
+        ;;
+esac
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 PKGROOT="$HERE/${PKG}_${VERSION}_${ARCH}"
 
-echo "==> Building hsedd (C daemon)"
+echo "==> Building hsedd (C daemon, $ARCH via $CC)"
 make -C "$ROOT/backend" clean
-make -C "$ROOT/backend"
+make -C "$ROOT/backend" CC="$CC"
 
-echo "==> Building hsed (Go TUI, static binary)"
-( cd "$ROOT/tui" && CGO_ENABLED=0 go build -ldflags="-s -w" -o hsed . )
+echo "==> Building hsed (Go TUI, $ARCH, static binary)"
+( cd "$ROOT/tui" && GOOS=linux GOARCH="$GOARCH" CGO_ENABLED=0 go build -ldflags="-s -w" -o hsed . )
 
 echo "==> Assembling package tree"
 rm -rf "$PKGROOT"
@@ -41,6 +51,9 @@ cp "$STATIC/DEBIAN/postinst" "$PKGROOT/DEBIAN/postinst"
 cp "$STATIC/DEBIAN/postrm" "$PKGROOT/DEBIAN/postrm"
 chmod 755 "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/postrm"
 chmod 644 "$PKGROOT/DEBIAN/control"
+
+
+sed -i "s/^Architecture:.*/Architecture: $ARCH/" "$PKGROOT/DEBIAN/control"
 
 SIZE_KB=$(du -sk --exclude=DEBIAN "$PKGROOT" | cut -f1)
 if grep -q '^Installed-Size:' "$PKGROOT/DEBIAN/control"; then

@@ -43,7 +43,6 @@ func (s *StreamScreen) Init() tea.Cmd {
 
 func (s *StreamScreen) Resize(w, h int) { s.width, s.height = w, h }
 
-// CloseSession implements the App's safety-net Closer interface.
 func (s *StreamScreen) CloseSession() {
 	if s.session != nil {
 		s.session.Close()

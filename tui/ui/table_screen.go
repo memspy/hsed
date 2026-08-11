@@ -23,10 +23,11 @@ type scanErrMsg struct{ err error }
 type tickMsg struct{}
 
 type TableScreen struct {
-	client   *client.Client
-	minSize  int64
-	onlyPID  int
-	interval time.Duration
+	client    *client.Client
+	minSize   int64
+	onlyPID   int
+	uidFilter int64
+	interval  time.Duration
 
 	table       table.Model
 	filterInput textinput.Model
@@ -42,7 +43,7 @@ type TableScreen struct {
 	width, height int
 }
 
-func NewTableScreen(c *client.Client, minSize int64, onlyPID int, interval time.Duration) *TableScreen {
+func NewTableScreen(c *client.Client, minSize int64, onlyPID int, uidFilter int64, interval time.Duration) *TableScreen {
 	cols := []table.Column{
 		{Title: "PID", Width: 7},
 		{Title: "Process", Width: 14},
@@ -68,6 +69,7 @@ func NewTableScreen(c *client.Client, minSize int64, onlyPID int, interval time.
 		client:      c,
 		minSize:     minSize,
 		onlyPID:     onlyPID,
+		uidFilter:   uidFilter,
 		interval:    interval,
 		table:       t,
 		filterInput: fi,
@@ -79,8 +81,9 @@ func (s *TableScreen) Resize(w, h int) {
 	if w <= 0 {
 		return
 	}
+	
 	fixed := 7 + 4 + 4 + 8 + 10
-	remaining := w - fixed - 10 // borders/padding fudge
+	remaining := w - fixed - 10 
 	if remaining < 20 {
 		remaining = 20
 	}
@@ -106,7 +109,7 @@ func (s *TableScreen) Resize(w, h int) {
 
 func (s *TableScreen) scanCmd() tea.Cmd {
 	return func() tea.Msg {
-		entries, total, err := s.client.Scan(s.minSize, s.onlyPID)
+		entries, total, err := s.client.Scan(s.minSize, s.onlyPID, s.uidFilter)
 		if err != nil {
 			return scanErrMsg{err: err}
 		}

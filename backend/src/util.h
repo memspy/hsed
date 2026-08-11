@@ -1,3 +1,4 @@
+
 #ifndef HSED_UTIL_H
 #define HSED_UTIL_H
 
@@ -11,4 +12,4 @@ void hsed_log_err(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 size_t hsed_strlcpy(char *dst, const char *src, size_t dstsize);
 
-#endif /* HSED_UTIL_H */
+#endif 

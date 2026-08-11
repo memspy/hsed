@@ -1,7 +1,4 @@
-#!/bin/sh
-# postrm for hsed — stops and disables the systemd service before its
-# unit file disappears, and reloads systemd afterward so it doesn't keep
-# a stale unit definition around.
+
 set -e
 
 case "$1" in
@@ -14,8 +11,6 @@ case "$1" in
 esac
 
 if [ "$1" = "purge" ]; then
-    # Runtime-only state; safe to remove even if hsedd is still running
-    # (it already has the fd open, unlinking the path doesn't affect it).
     rm -f /run/hsed.sock /run/hsed.pid
 fi
 
