@@ -8,6 +8,12 @@
 #define HSED_NAME_MAX 256
 #define HSED_CMDLINE_MAX 1024
 
+
+#define HSED_SCAN_THREADS_AUTO 0
+
+
+#define HSED_UID_ANY ((uid_t)-1)
+
 typedef struct {
     pid_t pid;
     int fd;
@@ -30,10 +36,21 @@ typedef struct {
     size_t capacity;
 } hsed_list_t;
 
+
+typedef struct {
+    size_t count;
+    long long total_bytes;
+} hsed_stats_t;
+
 void hsed_list_init(hsed_list_t *list);
 void hsed_list_free(hsed_list_t *list);
 
 
-int hsed_scan(hsed_list_t *out, long long min_size, pid_t only_pid);
+int hsed_scan(hsed_list_t *out, long long min_size, pid_t only_pid,
+              uid_t uid_filter, int num_threads);
+
+
+int hsed_scan_stats(hsed_stats_t *out, long long min_size, uid_t uid_filter,
+                     int num_threads);
 
 #endif 

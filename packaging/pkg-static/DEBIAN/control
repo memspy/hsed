@@ -1,5 +1,5 @@
 Package: hsed
-Version: 1.1.0
+Version: 1.1.1
 Section: admin
 Priority: optional
 Architecture: amd64
@@ -16,11 +16,17 @@ Description: TUI explorer for disk space hidden in unlinked-but-open files
           Table view, a reconstructed "hidden filesystem" tree, and
           per-file actions: truncate and reclaim space, send SIGHUP for
           a graceful log reopen, SIGKILL an unresponsive process, or
-          live-stream exactly what it is writing right now via ptrace.
+          live-stream exactly what it is writing right now via ptrace,
+          following every thread of the target process (including ones
+          created after streaming starts) and reassembling writev()
+          payloads, not just plain write().
   hsedd - the privileged backend daemon (systemd unit: hsed.service).
           Does all the actual /proc scanning, ftruncate, signal delivery,
           and ptrace work; hsed is purely a client of its Unix socket
-          protocol.
+          protocol. SCAN/STATS can filter by uid and parallelize the
+          /proc walk across worker threads on multi-core hosts.
  .
- Live streaming (STREAM) is x86_64-only in this release and requires
- root or CAP_SYS_PTRACE, same as strace/gdb -p.
+ Live streaming (STREAM) requires root or CAP_SYS_PTRACE, same as
+ strace/gdb -p. Implemented for x86_64 (verified) and aarch64 (compiles
+ and passes SCAN/TRUNCATE/HUP/KILL under QEMU emulation, but the ptrace
+ path itself has not yet been confirmed on real ARM64 hardware).

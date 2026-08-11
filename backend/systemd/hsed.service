@@ -5,14 +5,25 @@ After=local-fs.target
 
 [Service]
 Type=simple
+# --foreground: stay attached so systemd can supervise/restart it directly,
+# instead of hsed's own double-fork daemonization (the two don't mix well).
 ExecStart=/usr/sbin/hsedd --foreground --socket /run/hsed.sock
 Restart=on-failure
 RestartSec=2
 
-
+# hsed needs root for full process visibility and for CAP_SYS_PTRACE
+# (live streaming). If you only need SCAN/TRUNCATE/HUP for your own
+# processes, you can run it unprivileged instead and drop these two lines.
 User=root
 Group=root
 
+# Still worth tightening even as root — hsed touches no filesystem paths
+# beyond /proc, its own socket/pidfile, and whatever /proc/<pid>/fd/<fd>
+# targets an operator explicitly truncates. Note: ProtectSystem=strict
+# would make /run read-only too, which breaks binding /run/hsed.sock
+# directly — ProtectSystem=full leaves /run alone (only /usr and /boot go
+# read-only) so this stays correct without needing RuntimeDirectory=/
+# ReadWritePaths= juggling.
 ProtectSystem=full
 ProtectHome=true
 

@@ -19,7 +19,7 @@ type actionResultMsg struct {
 type DetailScreen struct {
 	client  *client.Client
 	entry   client.HiddenEntry
-	pending string // "" | "truncate" | "hup" | "kill"
+	pending string 
 	status  string
 
 	width, height int

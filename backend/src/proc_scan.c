@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,9 @@
 
 #define DELETED_SUFFIX " (deleted)"
 #define DELETED_SUFFIX_LEN 10
+
+
+#define HSED_MAX_AUTO_SCAN_THREADS 32
 
 void hsed_list_init(hsed_list_t *list) {
     list->items = NULL;
@@ -48,7 +52,6 @@ static int is_all_digits(const char *s) {
     return 1;
 }
 
-/* Tiny local strlcpy — always NUL-terminates dst (dstsize must be > 0). */
 static size_t hsed_strlcpy_local(char *dst, const char *src, size_t dstsize) {
     size_t srclen = strlen(src);
     if (dstsize > 0) {
@@ -58,6 +61,8 @@ static size_t hsed_strlcpy_local(char *dst, const char *src, size_t dstsize) {
     }
     return srclen;
 }
+
+
 
 static void read_first_line(const char *path, char *buf, size_t buflen) {
     buf[0] = '\0';
@@ -84,7 +89,6 @@ static void read_cmdline(pid_t pid, char *buf, size_t buflen) {
     if (n <= 0) goto fallback;
     raw[n] = '\0';
 
-    /* argv is NUL-separated; join with spaces into buf, bounded. */
     size_t out_pos = 0;
     int wrote_any = 0;
     for (ssize_t i = 0; i < n; ) {
@@ -100,7 +104,7 @@ static void read_cmdline(pid_t pid, char *buf, size_t buflen) {
             wrote_any = 1;
         }
         i += (ssize_t)arglen + 1;
-        if (arglen == 0) i = n; /* avoid infinite loop on stray data */
+        if (arglen == 0) i = n; 
     }
     buf[out_pos < buflen ? out_pos : buflen - 1] = '\0';
     if (wrote_any) return;
@@ -135,8 +139,8 @@ static void fd_mode(pid_t pid, int fdnum, char *out3) {
     char line[128];
     while (fgets(line, sizeof(line), f)) {
         if (strncmp(line, "flags:", 6) == 0) {
-            long flags = strtol(line + 6, NULL, 8); /* octal, like /proc docs */
-            long acc = flags & 3; /* O_ACCMODE */
+            long flags = strtol(line + 6, NULL, 8); 
+            long acc = flags & 3; 
             if (acc == 0) strcpy(out3, "r");
             else if (acc == 1) strcpy(out3, "w");
             else if (acc == 2) strcpy(out3, "rw");
@@ -158,32 +162,28 @@ static int is_virtual_target(const char *path) {
            strcmp(path, "/dev/zero") == 0;
 }
 
-static int scan_one_pid(hsed_list_t *out, pid_t pid, long long min_size) {
+
+static int scan_one_pid(hsed_list_t *out, hsed_stats_t *stats, pid_t pid,
+                         long long min_size, uid_t uid_filter) {
+    char proc_path[32];
+    snprintf(proc_path, sizeof(proc_path), "/proc/%d", (int)pid);
+    struct stat pst;
+    if (stat(proc_path, &pst) != 0) return 0; 
+
+    uid_t owner_uid = pst.st_uid;
+    if (uid_filter != HSED_UID_ANY && owner_uid != uid_filter) return 0;
+
     char fd_dir[64];
     snprintf(fd_dir, sizeof(fd_dir), "/proc/%d/fd", (int)pid);
-
     DIR *d = opendir(fd_dir);
-    if (!d) return 0; /* exited or no permission — not an error */
+    if (!d) return 0; 
 
-    char comm_path[64], comm[HSED_NAME_MAX];
-    snprintf(comm_path, sizeof(comm_path), "/proc/%d/comm", (int)pid);
-    read_first_line(comm_path, comm, sizeof(comm));
-    if (comm[0] == '\0') hsed_strlcpy_local(comm, "?", sizeof(comm));
-
+    char comm[HSED_NAME_MAX];
+    int comm_loaded = 0;
     char cmdline[HSED_CMDLINE_MAX];
     int cmdline_loaded = 0;
-
-    uid_t owner_uid = 0;
-    char owner_buf[HSED_NAME_MAX] = "?";
-    {
-        char proc_path[32];
-        snprintf(proc_path, sizeof(proc_path), "/proc/%d", (int)pid);
-        struct stat pst;
-        if (stat(proc_path, &pst) == 0) {
-            owner_uid = pst.st_uid;
-            owner_name(owner_uid, owner_buf, sizeof(owner_buf));
-        }
-    }
+    char owner_buf[HSED_NAME_MAX];
+    int owner_loaded = 0;
 
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
@@ -206,12 +206,29 @@ static int scan_one_pid(hsed_list_t *out, pid_t pid, long long min_size) {
         if (is_virtual_target(target)) continue;
 
         struct stat st;
-        if (stat(link_path, &st) != 0) continue; /* fd closed/raced away */
+        if (stat(link_path, &st) != 0) continue; 
         if (st.st_size < min_size) continue;
 
+        if (stats) {
+            stats->count++;
+            stats->total_bytes += (long long)st.st_size;
+            continue;
+        }
+
+        if (!comm_loaded) {
+            char comm_path[64];
+            snprintf(comm_path, sizeof(comm_path), "/proc/%d/comm", (int)pid);
+            read_first_line(comm_path, comm, sizeof(comm));
+            if (comm[0] == '\0') hsed_strlcpy_local(comm, "?", sizeof(comm));
+            comm_loaded = 1;
+        }
         if (!cmdline_loaded) {
             read_cmdline(pid, cmdline, sizeof(cmdline));
             cmdline_loaded = 1;
+        }
+        if (!owner_loaded) {
+            owner_name(owner_uid, owner_buf, sizeof(owner_buf));
+            owner_loaded = 1;
         }
 
         hsed_entry_t e;
@@ -247,29 +264,192 @@ static int cmp_by_size_desc(const void *a, const void *b) {
     return 0;
 }
 
-int hsed_scan(hsed_list_t *out, long long min_size, pid_t only_pid) {
-    hsed_list_init(out);
 
-    if (only_pid > 0) {
-        if (scan_one_pid(out, only_pid, min_size) != 0) return -1;
-    } else {
-        DIR *proc = opendir("/proc");
-        if (!proc) return -1;
+typedef struct {
+    pid_t *pids;
+    size_t count;
+} pid_list_t;
 
-        struct dirent *de;
-        while ((de = readdir(proc)) != NULL) {
-            if (!is_all_digits(de->d_name)) continue;
-            pid_t pid = (pid_t)atol(de->d_name);
-            if (scan_one_pid(out, pid, min_size) != 0) {
+static int gather_pids(pid_list_t *out) {
+    out->pids = NULL;
+    out->count = 0;
+    size_t cap = 0;
+
+    DIR *proc = opendir("/proc");
+    if (!proc) return -1;
+
+    struct dirent *de;
+    while ((de = readdir(proc)) != NULL) {
+        if (!is_all_digits(de->d_name)) continue;
+        if (out->count == cap) {
+            size_t newcap = cap == 0 ? 256 : cap * 2;
+            pid_t *grown = realloc(out->pids, newcap * sizeof(pid_t));
+            if (!grown) {
                 closedir(proc);
+                free(out->pids);
+                out->pids = NULL;
                 return -1;
             }
+            out->pids = grown;
+            cap = newcap;
         }
-        closedir(proc);
+        out->pids[out->count++] = (pid_t)atol(de->d_name);
     }
+    closedir(proc);
+    return 0;
+}
+
+static int pick_thread_count(int requested, size_t npids) {
+    long n;
+    if (requested > 0) {
+        n = requested;
+    } else {
+        n = sysconf(_SC_NPROCESSORS_ONLN);
+        if (n < 1) n = 1;
+        if (n > HSED_MAX_AUTO_SCAN_THREADS) n = HSED_MAX_AUTO_SCAN_THREADS;
+    }
+    if (npids == 0) return 1;
+    if ((size_t)n > npids) n = (long)npids;
+    if (n < 1) n = 1;
+    return (int)n;
+}
+
+typedef struct {
+    pid_t *pids;
+    size_t count;
+    long long min_size;
+    uid_t uid_filter;
+    int use_stats;
+
+    hsed_list_t list;   
+    hsed_stats_t stats; 
+    int failed;
+} scan_worker_t;
+
+static void *scan_worker_fn(void *arg) {
+    scan_worker_t *w = (scan_worker_t *)arg;
+    if (w->use_stats) {
+        w->stats.count = 0;
+        w->stats.total_bytes = 0;
+        for (size_t i = 0; i < w->count; i++) {
+            if (scan_one_pid(NULL, &w->stats, w->pids[i], w->min_size, w->uid_filter) != 0) {
+                w->failed = 1;
+                break;
+            }
+        }
+    } else {
+        hsed_list_init(&w->list);
+        for (size_t i = 0; i < w->count; i++) {
+            if (scan_one_pid(&w->list, NULL, w->pids[i], w->min_size, w->uid_filter) != 0) {
+                w->failed = 1;
+                break;
+            }
+        }
+    }
+    return NULL;
+}
+
+
+static int run_parallel_scan(pid_list_t *pl, long long min_size, uid_t uid_filter,
+                              int num_threads, int use_stats,
+                              hsed_list_t *out_list, hsed_stats_t *out_stats) {
+    int nthreads = pick_thread_count(num_threads, pl->count);
+
+    scan_worker_t *workers = calloc((size_t)nthreads, sizeof(scan_worker_t));
+    pthread_t *tids = calloc((size_t)nthreads, sizeof(pthread_t));
+    if (!workers || !tids) {
+        free(workers);
+        free(tids);
+        return -1;
+    }
+
+    size_t base = pl->count / (size_t)nthreads;
+    size_t rem = pl->count % (size_t)nthreads;
+    size_t offset = 0;
+    for (int i = 0; i < nthreads; i++) {
+        size_t chunk = base + ((size_t)i < rem ? 1 : 0);
+        workers[i].pids = pl->pids + offset;
+        workers[i].count = chunk;
+        workers[i].min_size = min_size;
+        workers[i].uid_filter = uid_filter;
+        workers[i].use_stats = use_stats;
+        offset += chunk;
+    }
+
+    for (int i = 1; i < nthreads; i++) {
+        if (pthread_create(&tids[i], NULL, scan_worker_fn, &workers[i]) != 0) {
+            tids[i] = 0; /* wasn't actually spawned; run it inline below */
+            scan_worker_fn(&workers[i]);
+        }
+    }
+    scan_worker_fn(&workers[0]);
+    for (int i = 1; i < nthreads; i++) {
+        if (tids[i] != 0) pthread_join(tids[i], NULL);
+    }
+
+    int failed = 0;
+    for (int i = 0; i < nthreads; i++) {
+        if (workers[i].failed) failed = 1;
+    }
+
+    if (!failed) {
+        if (use_stats) {
+            out_stats->count = 0;
+            out_stats->total_bytes = 0;
+            for (int i = 0; i < nthreads; i++) {
+                out_stats->count += workers[i].stats.count;
+                out_stats->total_bytes += workers[i].stats.total_bytes;
+            }
+        } else {
+            hsed_list_init(out_list);
+            for (int i = 0; i < nthreads && !failed; i++) {
+                for (size_t j = 0; j < workers[i].list.count; j++) {
+                    if (list_push(out_list, &workers[i].list.items[j]) != 0) {
+                        failed = 1;
+                        break;
+                    }
+                }
+            }
+            if (failed) hsed_list_free(out_list);
+        }
+    }
+
+    for (int i = 0; i < nthreads; i++) {
+        if (!use_stats) hsed_list_free(&workers[i].list);
+    }
+    free(workers);
+    free(tids);
+    return failed ? -1 : 0;
+}
+
+int hsed_scan(hsed_list_t *out, long long min_size, pid_t only_pid,
+              uid_t uid_filter, int num_threads) {
+    if (only_pid > 0) {
+        hsed_list_init(out);
+        if (scan_one_pid(out, NULL, only_pid, min_size, uid_filter) != 0) return -1;
+        if (out->count > 1) qsort(out->items, out->count, sizeof(hsed_entry_t), cmp_by_size_desc);
+        return 0;
+    }
+
+    pid_list_t pl;
+    if (gather_pids(&pl) != 0) return -1;
+
+    int rc = run_parallel_scan(&pl, min_size, uid_filter, num_threads, 0, out, NULL);
+    free(pl.pids);
+    if (rc != 0) return -1;
 
     if (out->count > 1) {
         qsort(out->items, out->count, sizeof(hsed_entry_t), cmp_by_size_desc);
     }
     return 0;
+}
+
+int hsed_scan_stats(hsed_stats_t *out, long long min_size, uid_t uid_filter,
+                     int num_threads) {
+    pid_list_t pl;
+    if (gather_pids(&pl) != 0) return -1;
+
+    int rc = run_parallel_scan(&pl, min_size, uid_filter, num_threads, 1, NULL, out);
+    free(pl.pids);
+    return rc;
 }

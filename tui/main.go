@@ -17,6 +17,7 @@ func main() {
 		minSize    = flag.Int64("min-size", 0, "Only show entries at least this many bytes")
 		interval   = flag.Duration("interval", 5*time.Second, "Auto-rescan interval")
 		onlyPID    = flag.Int("pid", 0, "Restrict scanning to a single PID")
+		uidFilter  = flag.Int64("uid", client.UIDAny, "Only show entries owned by this uid (default: every user)")
 		socketPath = flag.String("socket", "", "Path to the hsedd daemon's Unix socket "+
 			"(default: $HSED_SOCKET, else /run/hsed.sock as root, else /tmp/hsed-<uid>.sock)")
 	)
@@ -38,7 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	root := ui.NewTableScreen(c, *minSize, *onlyPID, *interval)
+	root := ui.NewTableScreen(c, *minSize, *onlyPID, *uidFilter, *interval)
 	app := ui.NewApp(c, root)
 
 	p := tea.NewProgram(app, tea.WithAltScreen())

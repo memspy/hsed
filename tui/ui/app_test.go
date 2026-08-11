@@ -15,6 +15,7 @@ import (
 
 const testSocket = "/tmp/hsed-go-test.sock"
 
+
 func driveScreen(s Screen, msg tea.Msg) Screen {
 	newS, cmd := s.Update(msg)
 	s = newS
@@ -40,7 +41,7 @@ func TestTableScreenScanAndPushDetail(t *testing.T) {
 	tmp.Sync()
 	os.Remove(tmp.Name())
 
-	table := NewTableScreen(c, 0, os.Getpid(), time.Hour)
+	table := NewTableScreen(c, 0, os.Getpid(), client.UIDAny, time.Hour)
 	table.Resize(120, 40)
 
 	
@@ -86,7 +87,7 @@ func TestDetailScreenTruncateFlow(t *testing.T) {
 	tmp.Sync()
 	os.Remove(tmp.Name())
 
-	entries, _, err := c.Scan(0, os.Getpid())
+	entries, _, err := c.Scan(0, os.Getpid(), client.UIDAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +116,7 @@ func TestDetailScreenTruncateFlow(t *testing.T) {
 		t.Fatalf("expected *ConfirmScreen, got %T", pm.screen)
 	}
 
+	
 	final := driveScreen(detail, resultMsg{value: true})
 	fd := final.(*DetailScreen)
 	if fd.status != "" {
@@ -133,7 +135,7 @@ func TestDetailScreenTruncateFlow(t *testing.T) {
 func TestKillConfirmScreenRequiresExactWord(t *testing.T) {
 	var s Screen = NewKillConfirmScreen("SIGKILL PID 1234 (test)?")
 	s.Resize(120, 40)
-	s.Init()() // focuses the input — Update ignores runes while unfocused
+	s.Init()() 
 
 	for _, ch := range "nope" {
 		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
@@ -177,7 +179,7 @@ time.sleep(15)
 	stdout.Read(buf)
 	defer victim.Process.Kill()
 
-	entries, _, err := c.Scan(0, victim.Process.Pid)
+	entries, _, err := c.Scan(0, victim.Process.Pid, client.UIDAny)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +202,7 @@ time.sleep(15)
 		t.Fatalf("expected *KillConfirmScreen, got %T", pushed.screen)
 	}
 
+	// Simulate the confirm screen answering "true" (as if KILL was typed).
 	final := driveScreen(detail, resultMsg{value: true})
 	fd := final.(*DetailScreen)
 	if fd.status != "" {
@@ -234,7 +237,6 @@ func TestTreeScreenBuildsAndNavigates(t *testing.T) {
 		t.Fatalf("expected top row to be the 'var' directory, got %+v", tree.rows[0])
 	}
 
-	// Expand var/ -> should reveal log/
 	var s Screen = tree
 	s, _ = s.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	tree = s.(*TreeScreen)
